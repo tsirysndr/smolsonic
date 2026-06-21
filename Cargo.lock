@@ -1976,6 +1976,7 @@ dependencies = [
  "clap",
  "futures",
  "hex",
+ "libsqlite3-sys",
  "lofty",
  "md-5",
  "mime_guess",
