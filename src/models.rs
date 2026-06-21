@@ -18,6 +18,16 @@ pub struct Album {
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
+pub struct Playlist {
+    pub id: String,
+    pub name: String,
+    pub comment: Option<String>,
+    pub public: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
 pub struct Song {
     pub id: String,
     pub path: String,

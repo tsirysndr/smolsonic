@@ -78,6 +78,31 @@ async fn migrate(pool: &Db) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_songs_album_id ON songs(album_id);
         CREATE INDEX IF NOT EXISTS idx_songs_artist_id ON songs(artist_id);
         CREATE INDEX IF NOT EXISTS idx_songs_title ON songs(title);
+        CREATE INDEX IF NOT EXISTS idx_songs_genre ON songs(genre);
+
+        CREATE TABLE IF NOT EXISTS starred (
+            id          TEXT PRIMARY KEY,
+            starred_at  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS playlists (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            comment     TEXT,
+            public      INTEGER NOT NULL DEFAULT 1,
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS playlist_songs (
+            playlist_id TEXT NOT NULL,
+            position    INTEGER NOT NULL,
+            song_id     TEXT NOT NULL,
+            PRIMARY KEY (playlist_id, position),
+            FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_playlist_songs_pl ON playlist_songs(playlist_id);
         "#,
     )
     .execute(pool)

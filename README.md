@@ -94,26 +94,36 @@ GET /rest/getScanStatus.view?u=…&t=…&s=…
 
 ## Supported endpoints
 
-This first cut implements the endpoints needed for a modern Subsonic client to
-browse (by ID3 tags) and play your library:
+Full navidrome-style endpoint coverage. Both `.view`-suffixed and plain paths
+are accepted, on both `GET` and `POST`. Responses are JSON with the Subsonic
+envelope (`{"subsonic-response": …}`).
 
-| Endpoint                     | Notes                                  |
-| ---------------------------- | -------------------------------------- |
-| `ping`                       | Auth check                             |
-| `getUser`                    | Single-user response                   |
-| `getMusicFolders`            | Returns one folder                     |
-| `getArtists`                 | Alphabetical A–Z + `#` index           |
-| `getArtist`                  | Albums for an artist                   |
-| `getAlbum`                   | Songs for an album                     |
-| `getSong`                    | Single song lookup                     |
-| `getAlbumList2`              | `alphabeticalByName/ByArtist/newest/random` |
-| `getCoverArt`                | Serves cached/embedded album art       |
-| `stream` / `download`        | Raw file, with `Range` support         |
-| `search3`                    | Simple `LIKE` search over tags         |
-| `getScanStatus` / `startScan`| Library scan control                   |
+**System** — `ping`, `getUser`, `getMusicFolders`, `getScanStatus`, `startScan`
 
-Both `.view`-suffixed and plain paths are accepted, on both `GET` and `POST`.
-Responses are JSON with the Subsonic envelope (`{"subsonic-response": …}`).
+**Library (ID3 tag browsing)** — `getArtists`, `getArtist`, `getAlbum`,
+`getSong`, `getAlbumList2`, `getAlbumList` (alias)
+
+**Library (folder browsing)** — `getIndexes`, `getMusicDirectory`
+
+**Genres** — `getGenres`, `getSongsByGenre`
+
+**Lists** — `getRandomSongs`, `getStarred2`, `getStarred` (alias)
+
+**Playback** — `stream`, `download`, `getCoverArt`, `scrobble`,
+`getNowPlaying`, `updateNowPlaying`
+
+**Search** — `search3`, `search2` (alias)
+
+**Playlists** — `getPlaylists`, `getPlaylist`, `createPlaylist`,
+`updatePlaylist`, `deletePlaylist`
+
+**Starring** — `star`, `unstar`
+
+**Artist / album info** — `getArtistInfo`, `getArtistInfo2`, `getAlbumInfo`,
+`getAlbumInfo2`, `getSimilarSongs`, `getSimilarSongs2`, `getTopSongs`,
+`getLyrics`. These return minimal stub shapes (no Last.fm or external lookups).
+
+`GET /` returns a plain-text index of every endpoint and its query params.
 
 ## Tested clients
 

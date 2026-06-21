@@ -26,20 +26,59 @@ Supported endpoints
     GET  /rest/getScanStatus    library scan progress
     GET  /rest/startScan        trigger a library rescan
 
-  Library (ID3 tag browsing)
+  Library — ID3 tag browsing
     GET  /rest/getArtists       alphabetical artist index
     GET  /rest/getArtist        ?id=ar-…   albums for an artist
     GET  /rest/getAlbum         ?id=al-…   songs for an album
     GET  /rest/getSong          ?id=so-…   single song lookup
     GET  /rest/getAlbumList2    ?type=alphabeticalByName|alphabeticalByArtist|newest|random
+    GET  /rest/getAlbumList     alias of getAlbumList2
+
+  Library — folder browsing
+    GET  /rest/getIndexes        flat A-Z artist index
+    GET  /rest/getMusicDirectory ?id=1|ar-…|al-…
+
+  Genres
+    GET  /rest/getGenres
+    GET  /rest/getSongsByGenre  ?genre=…&count=&offset=
+
+  Lists
+    GET  /rest/getRandomSongs   ?size=&fromYear=&toYear=&genre=
+    GET  /rest/getStarred2      starred artists / albums / songs
+    GET  /rest/getStarred       alias of getStarred2
 
   Playback
     GET  /rest/stream           ?id=so-…   raw audio, Range supported
     GET  /rest/download         ?id=so-…   alias for /rest/stream
     GET  /rest/getCoverArt      ?id=al-…|ar-…|so-…   cached album art
+    GET  /rest/scrobble         ?id=so-…
+    GET  /rest/getNowPlaying
+    GET  /rest/updateNowPlaying
 
   Search
     GET  /rest/search3          ?query=…&artistCount=&albumCount=&songCount=
+    GET  /rest/search2          legacy alias
+
+  Playlists
+    GET  /rest/getPlaylists
+    GET  /rest/getPlaylist      ?id=pl-…
+    GET  /rest/createPlaylist   ?name=…&songId=…&songId=…   (or ?playlistId=… to replace)
+    GET  /rest/updatePlaylist   ?playlistId=…&name=&comment=&songIdToAdd=&songIndexToRemove=
+    GET  /rest/deletePlaylist   ?id=pl-…
+
+  Starring
+    GET  /rest/star             ?id=so-…|albumId=al-…|artistId=ar-…
+    GET  /rest/unstar           ?id=so-…|albumId=al-…|artistId=ar-…
+
+  Artist / album info  (minimal stubs — no Last.fm lookup)
+    GET  /rest/getArtistInfo    ?id=ar-…
+    GET  /rest/getArtistInfo2   ?id=ar-…
+    GET  /rest/getAlbumInfo     ?id=al-…
+    GET  /rest/getAlbumInfo2    ?id=al-…
+    GET  /rest/getSimilarSongs  ?id=…
+    GET  /rest/getSimilarSongs2 ?id=…
+    GET  /rest/getTopSongs      ?artist=…&count=
+    GET  /rest/getLyrics        ?artist=&title=
 
 Auth (all /rest/* endpoints)
   Token:     u=<user>&t=md5(password+salt)&s=<salt>
@@ -114,6 +153,87 @@ pub struct AlbumListParams {
     pub list_type: Option<String>,
     pub size: Option<i64>,
     pub offset: Option<i64>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, Default)]
+pub struct RandomSongsParams {
+    pub u: Option<String>,
+    pub p: Option<String>,
+    pub t: Option<String>,
+    pub s: Option<String>,
+    pub f: Option<String>,
+    pub size: Option<i64>,
+    #[serde(rename = "fromYear")]
+    pub from_year: Option<i64>,
+    #[serde(rename = "toYear")]
+    pub to_year: Option<i64>,
+    pub genre: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, Default)]
+pub struct StarParams {
+    pub u: Option<String>,
+    pub p: Option<String>,
+    pub t: Option<String>,
+    pub s: Option<String>,
+    pub f: Option<String>,
+    pub id: Option<String>,
+    #[serde(rename = "albumId")]
+    pub album_id: Option<String>,
+    #[serde(rename = "artistId")]
+    pub artist_id: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, Default)]
+pub struct SongsByGenreParams {
+    pub u: Option<String>,
+    pub p: Option<String>,
+    pub t: Option<String>,
+    pub s: Option<String>,
+    pub f: Option<String>,
+    pub genre: Option<String>,
+    pub count: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, Default)]
+pub struct IndexesParams {
+    pub u: Option<String>,
+    pub p: Option<String>,
+    pub t: Option<String>,
+    pub s: Option<String>,
+    pub f: Option<String>,
+    #[serde(rename = "musicFolderId")]
+    pub music_folder_id: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, Default)]
+pub struct TopSongsParams {
+    pub u: Option<String>,
+    pub p: Option<String>,
+    pub t: Option<String>,
+    pub s: Option<String>,
+    pub f: Option<String>,
+    pub artist: Option<String>,
+    pub count: Option<i64>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, Default)]
+pub struct LyricsParams {
+    pub u: Option<String>,
+    pub p: Option<String>,
+    pub t: Option<String>,
+    pub s: Option<String>,
+    pub f: Option<String>,
+    pub id: Option<String>,
+    pub artist: Option<String>,
+    pub title: Option<String>,
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -667,6 +787,96 @@ pub async fn get_scan_status(
     }))
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn parse_repeated(qs: &str, key: &str) -> Vec<String> {
+    qs.split('&')
+        .filter_map(|p| {
+            let mut split = p.splitn(2, '=');
+            let k = split.next()?;
+            if k != key {
+                return None;
+            }
+            let v = split.next().unwrap_or("");
+            Some(percent_decode(v))
+        })
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn percent_decode(s: &str) -> String {
+    let mut out = Vec::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (
+                (bytes[i + 1] as char).to_digit(16),
+                (bytes[i + 2] as char).to_digit(16),
+            ) {
+                out.push(((hi << 4) | lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn query_value(qs: &str, key: &str) -> Option<String> {
+    qs.split('&').find_map(|p| {
+        let mut split = p.splitn(2, '=');
+        let k = split.next()?;
+        if k != key {
+            return None;
+        }
+        Some(percent_decode(split.next().unwrap_or("")))
+    })
+}
+
+fn now_iso8601() -> String {
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+fn new_playlist_id() -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let mut h = DefaultHasher::new();
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .hash(&mut h);
+    std::thread::current().id().hash(&mut h);
+    format!("pl-{:016x}", h.finish())
+}
+
+fn auth_from_qs(state: &SubsonicState, qs: &str) -> Option<HttpResponse> {
+    let u = query_value(qs, "u");
+    let p = query_value(qs, "p");
+    let t = query_value(qs, "t");
+    let s = query_value(qs, "s");
+    if !auth::check(
+        &state.username,
+        &state.password,
+        u.as_deref(),
+        p.as_deref(),
+        t.as_deref(),
+        s.as_deref(),
+    ) {
+        return Some(response::error_json(40, "Wrong username or password"));
+    }
+    None
+}
+
 pub async fn start_scan(
     state: web::Data<SubsonicState>,
     query: web::Query<CommonParams>,
@@ -694,5 +904,769 @@ pub async fn start_scan(
     });
     response::ok_json(json!({
         "scanStatus": { "scanning": true, "count": 0 }
+    }))
+}
+
+// ── Folder browsing ───────────────────────────────────────────────────────────
+
+pub async fn get_indexes(
+    state: web::Data<SubsonicState>,
+    query: web::Query<IndexesParams>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(
+        &state,
+        &CommonLike {
+            u: q.u.as_deref(),
+            p: q.p.as_deref(),
+            t: q.t.as_deref(),
+            s: q.s.as_deref(),
+        },
+    ) {
+        return r;
+    }
+    let artists = repo::all_artists(&state.pool).await.unwrap_or_default();
+    let counts = repo::album_counts_by_artist(&state.pool)
+        .await
+        .unwrap_or_default();
+    let index = build_artist_index(&artists, &counts);
+    response::ok_json(json!({
+        "indexes": {
+            "lastModified": 0,
+            "ignoredArticles": "The An A Die Das Ein",
+            "index": index,
+        }
+    }))
+}
+
+pub async fn get_music_directory(
+    state: web::Data<SubsonicState>,
+    query: web::Query<IdParam>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(&state, &CommonLike::from_id(&q)) {
+        return r;
+    }
+    let Some(id) = q.id.as_deref() else {
+        return response::error_json(10, "Required parameter is missing: id");
+    };
+
+    if id == "1" {
+        let artists = repo::all_artists(&state.pool).await.unwrap_or_default();
+        let children: Vec<Value> = artists
+            .iter()
+            .map(|a| {
+                json!({
+                    "id": a.id,
+                    "parent": "1",
+                    "isDir": true,
+                    "title": a.name,
+                    "album": a.name,
+                    "artist": a.name,
+                    "coverArt": a.id,
+                })
+            })
+            .collect();
+        return response::ok_json(json!({
+            "directory": {
+                "id": "1",
+                "name": "Music",
+                "child": children,
+            }
+        }));
+    }
+
+    if let Ok(Some(artist)) = repo::find_artist(&state.pool, id).await {
+        let albums = repo::albums_by_artist(&state.pool, id).await.unwrap_or_default();
+        let children: Vec<Value> = albums
+            .iter()
+            .map(|a| {
+                json!({
+                    "id": a.id,
+                    "parent": artist.id,
+                    "isDir": true,
+                    "title": a.title,
+                    "album": a.title,
+                    "artist": a.artist,
+                    "year": if a.year > 0 { json!(a.year) } else { Value::Null },
+                    "coverArt": a.id,
+                })
+            })
+            .collect();
+        return response::ok_json(json!({
+            "directory": {
+                "id": artist.id,
+                "name": artist.name,
+                "child": children,
+            }
+        }));
+    }
+
+    if let Ok(Some(album)) = repo::find_album(&state.pool, id).await {
+        let songs = repo::songs_by_album(&state.pool, id).await.unwrap_or_default();
+        let children: Vec<Value> = songs.iter().map(song_to_child).collect();
+        return response::ok_json(json!({
+            "directory": {
+                "id": album.id,
+                "name": album.title,
+                "child": children,
+            }
+        }));
+    }
+
+    response::error_json(70, "Directory not found")
+}
+
+// ── Genres ────────────────────────────────────────────────────────────────────
+
+pub async fn get_genres(
+    state: web::Data<SubsonicState>,
+    query: web::Query<CommonParams>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(&state, &CommonLike::from_common(&q)) {
+        return r;
+    }
+    let rows = repo::distinct_genres(&state.pool).await.unwrap_or_default();
+    let genres: Vec<Value> = rows
+        .into_iter()
+        .map(|(name, songs, albums)| {
+            json!({ "value": name, "songCount": songs, "albumCount": albums })
+        })
+        .collect();
+    response::ok_json(json!({ "genres": { "genre": genres } }))
+}
+
+pub async fn get_songs_by_genre(
+    state: web::Data<SubsonicState>,
+    query: web::Query<SongsByGenreParams>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(
+        &state,
+        &CommonLike {
+            u: q.u.as_deref(),
+            p: q.p.as_deref(),
+            t: q.t.as_deref(),
+            s: q.s.as_deref(),
+        },
+    ) {
+        return r;
+    }
+    let Some(genre) = q.genre.as_deref() else {
+        return response::error_json(10, "Required parameter is missing: genre");
+    };
+    let count = q.count.unwrap_or(10).clamp(1, 500);
+    let offset = q.offset.unwrap_or(0).max(0);
+    let songs = repo::songs_by_genre(&state.pool, genre, count, offset)
+        .await
+        .unwrap_or_default();
+    let children: Vec<Value> = songs.iter().map(song_to_child).collect();
+    response::ok_json(json!({ "songsByGenre": { "song": children } }))
+}
+
+// ── Random / Starred ──────────────────────────────────────────────────────────
+
+pub async fn get_random_songs(
+    state: web::Data<SubsonicState>,
+    query: web::Query<RandomSongsParams>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(
+        &state,
+        &CommonLike {
+            u: q.u.as_deref(),
+            p: q.p.as_deref(),
+            t: q.t.as_deref(),
+            s: q.s.as_deref(),
+        },
+    ) {
+        return r;
+    }
+    let size = q.size.unwrap_or(10).clamp(1, 500);
+    let songs = repo::random_songs(
+        &state.pool,
+        size,
+        q.from_year,
+        q.to_year,
+        q.genre.as_deref(),
+    )
+    .await
+    .unwrap_or_default();
+    let children: Vec<Value> = songs.iter().map(song_to_child).collect();
+    response::ok_json(json!({ "randomSongs": { "song": children } }))
+}
+
+pub async fn get_starred2(
+    state: web::Data<SubsonicState>,
+    query: web::Query<CommonParams>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(&state, &CommonLike::from_common(&q)) {
+        return r;
+    }
+    let songs = repo::starred_songs(&state.pool).await.unwrap_or_default();
+    let albums = repo::starred_albums(&state.pool).await.unwrap_or_default();
+    let artists = repo::starred_artists(&state.pool).await.unwrap_or_default();
+
+    let song_jsons: Vec<Value> = songs
+        .iter()
+        .map(|(s, when)| {
+            let mut v = song_to_child(s);
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("starred".into(), json!(when));
+            }
+            v
+        })
+        .collect();
+    let mut album_jsons = Vec::with_capacity(albums.len());
+    for (a, when) in &albums {
+        let count = repo::song_count_for_album(&state.pool, &a.id)
+            .await
+            .unwrap_or(0);
+        let dur = repo::songs_for_album_duration(&state.pool, &a.id)
+            .await
+            .unwrap_or(0);
+        let mut v = album_to_child(a, count, dur);
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert("starred".into(), json!(when));
+        }
+        album_jsons.push(v);
+    }
+    let artist_jsons: Vec<Value> = artists
+        .iter()
+        .map(|(a, when)| {
+            let mut v = artist_to_json(a, 0);
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("starred".into(), json!(when));
+            }
+            v
+        })
+        .collect();
+
+    response::ok_json(json!({
+        "starred2": {
+            "artist": artist_jsons,
+            "album": album_jsons,
+            "song": song_jsons,
+        }
+    }))
+}
+
+pub async fn get_starred(
+    state: web::Data<SubsonicState>,
+    query: web::Query<CommonParams>,
+) -> HttpResponse {
+    // Subsonic spec wraps under "starred" — same payload shape.
+    let res = get_starred2(state, query).await;
+    res
+}
+
+pub async fn star(
+    state: web::Data<SubsonicState>,
+    query: web::Query<StarParams>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(
+        &state,
+        &CommonLike {
+            u: q.u.as_deref(),
+            p: q.p.as_deref(),
+            t: q.t.as_deref(),
+            s: q.s.as_deref(),
+        },
+    ) {
+        return r;
+    }
+    let target = q
+        .id
+        .as_deref()
+        .or(q.album_id.as_deref())
+        .or(q.artist_id.as_deref());
+    let Some(target) = target else {
+        return response::ok_json(json!({}));
+    };
+    if let Err(e) = repo::star(&state.pool, target, &now_iso8601()).await {
+        tracing::error!("star: {e}");
+        return response::error_json(0, "database error");
+    }
+    response::ok_json(json!({}))
+}
+
+pub async fn unstar(
+    state: web::Data<SubsonicState>,
+    query: web::Query<StarParams>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(
+        &state,
+        &CommonLike {
+            u: q.u.as_deref(),
+            p: q.p.as_deref(),
+            t: q.t.as_deref(),
+            s: q.s.as_deref(),
+        },
+    ) {
+        return r;
+    }
+    let target = q
+        .id
+        .as_deref()
+        .or(q.album_id.as_deref())
+        .or(q.artist_id.as_deref());
+    let Some(target) = target else {
+        return response::ok_json(json!({}));
+    };
+    if let Err(e) = repo::unstar(&state.pool, target).await {
+        tracing::error!("unstar: {e}");
+        return response::error_json(0, "database error");
+    }
+    response::ok_json(json!({}))
+}
+
+// ── Scrobble / NowPlaying ─────────────────────────────────────────────────────
+
+pub async fn scrobble(
+    state: web::Data<SubsonicState>,
+    query: web::Query<IdParam>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(&state, &CommonLike::from_id(&q)) {
+        return r;
+    }
+    response::ok_json(json!({}))
+}
+
+pub async fn get_now_playing(
+    state: web::Data<SubsonicState>,
+    query: web::Query<CommonParams>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(&state, &CommonLike::from_common(&q)) {
+        return r;
+    }
+    response::ok_json(json!({ "nowPlaying": { "entry": [] } }))
+}
+
+pub async fn update_now_playing(
+    state: web::Data<SubsonicState>,
+    query: web::Query<CommonParams>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(&state, &CommonLike::from_common(&q)) {
+        return r;
+    }
+    response::ok_json(json!({}))
+}
+
+// ── Playlists ─────────────────────────────────────────────────────────────────
+
+async fn playlist_json(state: &SubsonicState, pl: &crate::models::Playlist) -> Value {
+    let songs = repo::playlist_songs(&state.pool, &pl.id).await.unwrap_or_default();
+    let duration = songs.iter().map(|s| s.duration_ms / 1000).sum::<i64>();
+    json!({
+        "id": pl.id,
+        "name": pl.name,
+        "comment": pl.comment,
+        "songCount": songs.len(),
+        "duration": duration,
+        "public": pl.public != 0,
+        "created": pl.created_at,
+        "changed": pl.updated_at,
+        "coverArt": Value::Null,
+    })
+}
+
+pub async fn get_playlists(
+    state: web::Data<SubsonicState>,
+    query: web::Query<CommonParams>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(&state, &CommonLike::from_common(&q)) {
+        return r;
+    }
+    let playlists = repo::all_playlists(&state.pool).await.unwrap_or_default();
+    let mut out = Vec::with_capacity(playlists.len());
+    for pl in &playlists {
+        out.push(playlist_json(&state, pl).await);
+    }
+    response::ok_json(json!({ "playlists": { "playlist": out } }))
+}
+
+pub async fn get_playlist(
+    state: web::Data<SubsonicState>,
+    query: web::Query<IdParam>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(&state, &CommonLike::from_id(&q)) {
+        return r;
+    }
+    let Some(id) = q.id.as_deref() else {
+        return response::error_json(10, "Required parameter is missing: id");
+    };
+    let pl = match repo::find_playlist(&state.pool, id).await {
+        Ok(Some(p)) => p,
+        Ok(None) => return response::error_json(70, "Playlist not found"),
+        Err(e) => {
+            tracing::error!("getPlaylist: {e}");
+            return response::error_json(0, "database error");
+        }
+    };
+    let songs = repo::playlist_songs(&state.pool, id).await.unwrap_or_default();
+    let duration = songs.iter().map(|s| s.duration_ms / 1000).sum::<i64>();
+    let entry: Vec<Value> = songs.iter().map(song_to_child).collect();
+    response::ok_json(json!({
+        "playlist": {
+            "id": pl.id,
+            "name": pl.name,
+            "comment": pl.comment,
+            "songCount": entry.len(),
+            "duration": duration,
+            "public": pl.public != 0,
+            "created": pl.created_at,
+            "changed": pl.updated_at,
+            "coverArt": Value::Null,
+            "entry": entry,
+        }
+    }))
+}
+
+pub async fn create_playlist(
+    state: web::Data<SubsonicState>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let qs = req.query_string();
+    if let Some(r) = auth_from_qs(&state, qs) {
+        return r;
+    }
+    let existing_id = query_value(qs, "playlistId");
+    let name = query_value(qs, "name").unwrap_or_else(|| "Untitled".to_string());
+    let song_ids = parse_repeated(qs, "songId");
+    let now = now_iso8601();
+
+    let id = match existing_id {
+        Some(id) if !id.is_empty() => {
+            if repo::find_playlist(&state.pool, &id)
+                .await
+                .ok()
+                .flatten()
+                .is_none()
+            {
+                if let Err(e) = repo::create_playlist(&state.pool, &id, &name, &now).await {
+                    tracing::error!("createPlaylist: {e}");
+                    return response::error_json(0, "database error");
+                }
+            } else {
+                let _ = repo::rename_playlist(&state.pool, &id, &name, &now).await;
+            }
+            if !song_ids.is_empty() {
+                let _ = repo::replace_playlist_songs(&state.pool, &id, &song_ids).await;
+            }
+            id
+        }
+        _ => {
+            let id = new_playlist_id();
+            if let Err(e) = repo::create_playlist(&state.pool, &id, &name, &now).await {
+                tracing::error!("createPlaylist: {e}");
+                return response::error_json(0, "database error");
+            }
+            if !song_ids.is_empty() {
+                let _ = repo::append_playlist_songs(&state.pool, &id, &song_ids).await;
+            }
+            id
+        }
+    };
+
+    let pl = match repo::find_playlist(&state.pool, &id).await {
+        Ok(Some(p)) => p,
+        _ => return response::error_json(0, "playlist persistence error"),
+    };
+    let songs = repo::playlist_songs(&state.pool, &id).await.unwrap_or_default();
+    let duration = songs.iter().map(|s| s.duration_ms / 1000).sum::<i64>();
+    let entry: Vec<Value> = songs.iter().map(song_to_child).collect();
+    response::ok_json(json!({
+        "playlist": {
+            "id": pl.id,
+            "name": pl.name,
+            "comment": pl.comment,
+            "songCount": entry.len(),
+            "duration": duration,
+            "public": pl.public != 0,
+            "created": pl.created_at,
+            "changed": pl.updated_at,
+            "coverArt": Value::Null,
+            "entry": entry,
+        }
+    }))
+}
+
+pub async fn update_playlist(
+    state: web::Data<SubsonicState>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let qs = req.query_string();
+    if let Some(r) = auth_from_qs(&state, qs) {
+        return r;
+    }
+    let Some(id) = query_value(qs, "playlistId") else {
+        return response::error_json(10, "Required parameter is missing: playlistId");
+    };
+    if repo::find_playlist(&state.pool, &id)
+        .await
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        return response::error_json(70, "Playlist not found");
+    }
+    let now = now_iso8601();
+    if let Some(name) = query_value(qs, "name") {
+        let _ = repo::rename_playlist(&state.pool, &id, &name, &now).await;
+    }
+    if let Some(comment) = query_value(qs, "comment") {
+        let _ = repo::set_playlist_comment(&state.pool, &id, &comment, &now).await;
+    }
+    let to_add = parse_repeated(qs, "songIdToAdd");
+    if !to_add.is_empty() {
+        let _ = repo::append_playlist_songs(&state.pool, &id, &to_add).await;
+    }
+    let to_remove: Vec<usize> = parse_repeated(qs, "songIndexToRemove")
+        .into_iter()
+        .filter_map(|s| s.parse::<usize>().ok())
+        .collect();
+    if !to_remove.is_empty() {
+        let mut current = repo::playlist_song_ids(&state.pool, &id)
+            .await
+            .unwrap_or_default();
+        let mut indices: Vec<usize> = to_remove;
+        indices.sort_unstable_by(|a, b| b.cmp(a));
+        for i in indices {
+            if i < current.len() {
+                current.remove(i);
+            }
+        }
+        let _ = repo::replace_playlist_songs(&state.pool, &id, &current).await;
+    }
+    response::ok_json(json!({}))
+}
+
+pub async fn delete_playlist(
+    state: web::Data<SubsonicState>,
+    query: web::Query<IdParam>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(&state, &CommonLike::from_id(&q)) {
+        return r;
+    }
+    let Some(id) = q.id.as_deref() else {
+        return response::error_json(10, "Required parameter is missing: id");
+    };
+    if let Err(e) = repo::delete_playlist(&state.pool, id).await {
+        tracing::error!("deletePlaylist: {e}");
+        return response::error_json(0, "database error");
+    }
+    response::ok_json(json!({}))
+}
+
+// ── Artist / Album info — minimal stubs ───────────────────────────────────────
+
+fn empty_artist_info() -> Value {
+    json!({
+        "biography": "",
+        "musicBrainzId": "",
+        "lastFmUrl": "",
+        "smallImageUrl": "",
+        "mediumImageUrl": "",
+        "largeImageUrl": "",
+        "similarArtist": [],
+    })
+}
+
+pub async fn get_artist_info(
+    state: web::Data<SubsonicState>,
+    query: web::Query<IdParam>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(&state, &CommonLike::from_id(&q)) {
+        return r;
+    }
+    response::ok_json(json!({ "artistInfo": empty_artist_info() }))
+}
+
+pub async fn get_artist_info2(
+    state: web::Data<SubsonicState>,
+    query: web::Query<IdParam>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(&state, &CommonLike::from_id(&q)) {
+        return r;
+    }
+    response::ok_json(json!({ "artistInfo2": empty_artist_info() }))
+}
+
+pub async fn get_album_info(
+    state: web::Data<SubsonicState>,
+    query: web::Query<IdParam>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(&state, &CommonLike::from_id(&q)) {
+        return r;
+    }
+    response::ok_json(json!({
+        "albumInfo": {
+            "notes": "",
+            "musicBrainzId": "",
+            "lastFmUrl": "",
+            "smallImageUrl": "",
+            "mediumImageUrl": "",
+            "largeImageUrl": "",
+        }
+    }))
+}
+
+pub async fn get_similar_songs(
+    state: web::Data<SubsonicState>,
+    query: web::Query<IdParam>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(&state, &CommonLike::from_id(&q)) {
+        return r;
+    }
+    response::ok_json(json!({ "similarSongs": { "song": [] } }))
+}
+
+pub async fn get_similar_songs2(
+    state: web::Data<SubsonicState>,
+    query: web::Query<IdParam>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(&state, &CommonLike::from_id(&q)) {
+        return r;
+    }
+    response::ok_json(json!({ "similarSongs2": { "song": [] } }))
+}
+
+pub async fn get_top_songs(
+    state: web::Data<SubsonicState>,
+    query: web::Query<TopSongsParams>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(
+        &state,
+        &CommonLike {
+            u: q.u.as_deref(),
+            p: q.p.as_deref(),
+            t: q.t.as_deref(),
+            s: q.s.as_deref(),
+        },
+    ) {
+        return r;
+    }
+    let Some(artist) = q.artist.as_deref() else {
+        return response::ok_json(json!({ "topSongs": { "song": [] } }));
+    };
+    let count = q.count.unwrap_or(50).clamp(1, 500);
+    let songs = repo::search_songs(&state.pool, artist, count, 0)
+        .await
+        .unwrap_or_default();
+    let children: Vec<Value> = songs
+        .iter()
+        .filter(|s| s.artist.eq_ignore_ascii_case(artist))
+        .map(song_to_child)
+        .collect();
+    response::ok_json(json!({ "topSongs": { "song": children } }))
+}
+
+pub async fn get_lyrics(
+    state: web::Data<SubsonicState>,
+    query: web::Query<LyricsParams>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(
+        &state,
+        &CommonLike {
+            u: q.u.as_deref(),
+            p: q.p.as_deref(),
+            t: q.t.as_deref(),
+            s: q.s.as_deref(),
+        },
+    ) {
+        return r;
+    }
+    response::ok_json(json!({
+        "lyrics": {
+            "artist": q.artist.unwrap_or_default(),
+            "title": q.title.unwrap_or_default(),
+            "value": "",
+        }
+    }))
+}
+
+// ── Aliases ───────────────────────────────────────────────────────────────────
+
+pub async fn get_album_list(
+    state: web::Data<SubsonicState>,
+    query: web::Query<AlbumListParams>,
+) -> HttpResponse {
+    // Same shape as albumList2 — most clients accept this.
+    let q = query.into_inner();
+    if let Some(r) = require_auth(&state, &CommonLike::from_album_list(&q)) {
+        return r;
+    }
+    let list_type = q.list_type.as_deref().unwrap_or("alphabeticalByName");
+    let size = q.size.unwrap_or(10).clamp(1, 500);
+    let offset = q.offset.unwrap_or(0).max(0);
+    let albums = repo::albums_paginated(&state.pool, list_type, size, offset)
+        .await
+        .unwrap_or_default();
+    let mut album_jsons = Vec::with_capacity(albums.len());
+    for a in &albums {
+        let count = repo::song_count_for_album(&state.pool, &a.id).await.unwrap_or(0);
+        let dur = repo::songs_for_album_duration(&state.pool, &a.id).await.unwrap_or(0);
+        album_jsons.push(album_to_child(a, count, dur));
+    }
+    response::ok_json(json!({ "albumList": { "album": album_jsons } }))
+}
+
+pub async fn search2(
+    state: web::Data<SubsonicState>,
+    query: web::Query<SearchParams>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(&state, &CommonLike::from_search(&q)) {
+        return r;
+    }
+    let term = q.query.unwrap_or_default();
+    let artist_limit = q.artist_count.unwrap_or(20);
+    let album_limit = q.album_count.unwrap_or(20);
+    let song_limit = q.song_count.unwrap_or(20);
+    let artist_offset = q.artist_offset.unwrap_or(0);
+    let album_offset = q.album_offset.unwrap_or(0);
+    let song_offset = q.song_offset.unwrap_or(0);
+
+    let artists = repo::search_artists(&state.pool, &term, artist_limit, artist_offset)
+        .await
+        .unwrap_or_default();
+    let albums = repo::search_albums(&state.pool, &term, album_limit, album_offset)
+        .await
+        .unwrap_or_default();
+    let songs = repo::search_songs(&state.pool, &term, song_limit, song_offset)
+        .await
+        .unwrap_or_default();
+    let artist_jsons: Vec<Value> = artists.iter().map(|a| artist_to_json(a, 0)).collect();
+    let mut album_jsons = Vec::with_capacity(albums.len());
+    for a in &albums {
+        let count = repo::song_count_for_album(&state.pool, &a.id).await.unwrap_or(0);
+        let dur = repo::songs_for_album_duration(&state.pool, &a.id).await.unwrap_or(0);
+        album_jsons.push(album_to_child(a, count, dur));
+    }
+    let song_jsons: Vec<Value> = songs.iter().map(song_to_child).collect();
+
+    response::ok_json(json!({
+        "searchResult2": {
+            "artist": artist_jsons,
+            "album": album_jsons,
+            "song": song_jsons,
+        }
     }))
 }
