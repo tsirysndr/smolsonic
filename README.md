@@ -1,4 +1,5 @@
 # smolsonic
+[![Release](https://github.com/tsirysndr/smolsonic/actions/workflows/release.yml/badge.svg)](https://github.com/tsirysndr/smolsonic/actions/workflows/release.yml)
 
 A tiny, self-contained [Subsonic](http://www.subsonic.org/pages/api.jsp)-compatible
 music server written in Rust. Point it at a folder of music, give it a username
