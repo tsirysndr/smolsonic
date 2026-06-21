@@ -103,10 +103,109 @@ async fn migrate(pool: &Db) -> Result<()> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_playlist_songs_pl ON playlist_songs(playlist_id);
+
+        -- ── FTS5 full-text search ────────────────────────────────────────────
+        CREATE VIRTUAL TABLE IF NOT EXISTS songs_fts USING fts5(
+            id UNINDEXED, title, artist, album, genre,
+            tokenize = 'unicode61 remove_diacritics 2'
+        );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS albums_fts USING fts5(
+            id UNINDEXED, title, artist,
+            tokenize = 'unicode61 remove_diacritics 2'
+        );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS artists_fts USING fts5(
+            id UNINDEXED, name,
+            tokenize = 'unicode61 remove_diacritics 2'
+        );
+
+        -- Triggers to keep FTS tables in sync with base tables.
+        CREATE TRIGGER IF NOT EXISTS songs_ai AFTER INSERT ON songs BEGIN
+            INSERT INTO songs_fts (id, title, artist, album, genre)
+            VALUES (NEW.id, NEW.title, NEW.artist, NEW.album, COALESCE(NEW.genre, ''));
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS songs_ad AFTER DELETE ON songs BEGIN
+            DELETE FROM songs_fts WHERE id = OLD.id;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS songs_au AFTER UPDATE ON songs BEGIN
+            DELETE FROM songs_fts WHERE id = OLD.id;
+            INSERT INTO songs_fts (id, title, artist, album, genre)
+            VALUES (NEW.id, NEW.title, NEW.artist, NEW.album, COALESCE(NEW.genre, ''));
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS albums_ai AFTER INSERT ON albums BEGIN
+            INSERT INTO albums_fts (id, title, artist)
+            VALUES (NEW.id, NEW.title, NEW.artist);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS albums_ad AFTER DELETE ON albums BEGIN
+            DELETE FROM albums_fts WHERE id = OLD.id;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS albums_au AFTER UPDATE ON albums BEGIN
+            DELETE FROM albums_fts WHERE id = OLD.id;
+            INSERT INTO albums_fts (id, title, artist)
+            VALUES (NEW.id, NEW.title, NEW.artist);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS artists_ai AFTER INSERT ON artists BEGIN
+            INSERT INTO artists_fts (id, name) VALUES (NEW.id, NEW.name);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS artists_ad AFTER DELETE ON artists BEGIN
+            DELETE FROM artists_fts WHERE id = OLD.id;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS artists_au AFTER UPDATE ON artists BEGIN
+            DELETE FROM artists_fts WHERE id = OLD.id;
+            INSERT INTO artists_fts (id, name) VALUES (NEW.id, NEW.name);
+        END;
         "#,
     )
     .execute(pool)
     .await
     .context("running migrations")?;
+
+    // One-shot backfill for databases that existed before FTS was introduced.
+    backfill_fts(pool).await?;
+    Ok(())
+}
+
+async fn backfill_fts(pool: &Db) -> Result<()> {
+    let songs_empty: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM songs_fts")
+        .fetch_one(pool)
+        .await?;
+    if songs_empty == 0 {
+        sqlx::query(
+            "INSERT INTO songs_fts (id, title, artist, album, genre)
+             SELECT id, title, artist, album, COALESCE(genre, '') FROM songs",
+        )
+        .execute(pool)
+        .await?;
+    }
+    let albums_empty: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM albums_fts")
+        .fetch_one(pool)
+        .await?;
+    if albums_empty == 0 {
+        sqlx::query(
+            "INSERT INTO albums_fts (id, title, artist)
+             SELECT id, title, artist FROM albums",
+        )
+        .execute(pool)
+        .await?;
+    }
+    let artists_empty: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM artists_fts")
+        .fetch_one(pool)
+        .await?;
+    if artists_empty == 0 {
+        sqlx::query(
+            "INSERT INTO artists_fts (id, name) SELECT id, name FROM artists",
+        )
+        .execute(pool)
+        .await?;
+    }
     Ok(())
 }

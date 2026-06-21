@@ -73,13 +73,50 @@ pub async fn find_song(pool: &Db, id: &str) -> Result<Option<Song>> {
     Ok(row)
 }
 
+/// Build an FTS5 MATCH expression: each whitespace-separated token becomes a
+/// quoted prefix term ANDed together. e.g. `tay swift` → `"tay"* "swift"*`.
+/// Returns None when the input has no usable tokens.
+fn fts5_match(term: &str) -> Option<String> {
+    let parts: Vec<String> = term
+        .split_whitespace()
+        .filter_map(|w| {
+            let cleaned: String = w
+                .chars()
+                .filter(|c| c.is_alphanumeric() || matches!(*c, '_' | '-'))
+                .collect();
+            if cleaned.is_empty() {
+                None
+            } else {
+                Some(format!("\"{}\"*", cleaned))
+            }
+        })
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
+    }
+}
+
 pub async fn search_artists(pool: &Db, term: &str, limit: i64, offset: i64) -> Result<Vec<Artist>> {
-    let pat = format!("%{}%", term);
+    let Some(q) = fts5_match(term) else {
+        let rows = sqlx::query_as::<_, Artist>(
+            "SELECT id, name FROM artists ORDER BY name COLLATE NOCASE LIMIT ?1 OFFSET ?2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?;
+        return Ok(rows);
+    };
     let rows = sqlx::query_as::<_, Artist>(
-        "SELECT id, name FROM artists WHERE name LIKE ?1 COLLATE NOCASE
-         ORDER BY name COLLATE NOCASE LIMIT ?2 OFFSET ?3",
+        "SELECT a.id, a.name
+         FROM artists_fts f INNER JOIN artists a ON a.id = f.id
+         WHERE f.artists_fts MATCH ?1
+         ORDER BY f.rank
+         LIMIT ?2 OFFSET ?3",
     )
-    .bind(pat)
+    .bind(q)
     .bind(limit)
     .bind(offset)
     .fetch_all(pool)
@@ -88,13 +125,25 @@ pub async fn search_artists(pool: &Db, term: &str, limit: i64, offset: i64) -> R
 }
 
 pub async fn search_albums(pool: &Db, term: &str, limit: i64, offset: i64) -> Result<Vec<Album>> {
-    let pat = format!("%{}%", term);
+    let Some(q) = fts5_match(term) else {
+        let rows = sqlx::query_as::<_, Album>(
+            "SELECT id, title, artist, artist_id, year, cover_art FROM albums
+             ORDER BY title COLLATE NOCASE LIMIT ?1 OFFSET ?2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?;
+        return Ok(rows);
+    };
     let rows = sqlx::query_as::<_, Album>(
-        "SELECT id, title, artist, artist_id, year, cover_art FROM albums
-         WHERE title LIKE ?1 COLLATE NOCASE OR artist LIKE ?1 COLLATE NOCASE
-         ORDER BY title COLLATE NOCASE LIMIT ?2 OFFSET ?3",
+        "SELECT a.id, a.title, a.artist, a.artist_id, a.year, a.cover_art
+         FROM albums_fts f INNER JOIN albums a ON a.id = f.id
+         WHERE f.albums_fts MATCH ?1
+         ORDER BY f.rank
+         LIMIT ?2 OFFSET ?3",
     )
-    .bind(pat)
+    .bind(q)
     .bind(limit)
     .bind(offset)
     .fetch_all(pool)
@@ -103,15 +152,28 @@ pub async fn search_albums(pool: &Db, term: &str, limit: i64, offset: i64) -> Re
 }
 
 pub async fn search_songs(pool: &Db, term: &str, limit: i64, offset: i64) -> Result<Vec<Song>> {
-    let pat = format!("%{}%", term);
+    let Some(q) = fts5_match(term) else {
+        let rows = sqlx::query_as::<_, Song>(
+            "SELECT id, path, title, artist, artist_id, album, album_id, genre, track_number,
+                    disc_number, year, duration_ms, bitrate, filesize, suffix, content_type, cover_art
+             FROM songs ORDER BY title COLLATE NOCASE LIMIT ?1 OFFSET ?2",
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?;
+        return Ok(rows);
+    };
     let rows = sqlx::query_as::<_, Song>(
-        "SELECT id, path, title, artist, artist_id, album, album_id, genre, track_number,
-                disc_number, year, duration_ms, bitrate, filesize, suffix, content_type, cover_art
-         FROM songs
-         WHERE title LIKE ?1 COLLATE NOCASE OR artist LIKE ?1 COLLATE NOCASE OR album LIKE ?1 COLLATE NOCASE
-         ORDER BY title COLLATE NOCASE LIMIT ?2 OFFSET ?3",
+        "SELECT s.id, s.path, s.title, s.artist, s.artist_id, s.album, s.album_id, s.genre,
+                s.track_number, s.disc_number, s.year, s.duration_ms, s.bitrate, s.filesize,
+                s.suffix, s.content_type, s.cover_art
+         FROM songs_fts f INNER JOIN songs s ON s.id = f.id
+         WHERE f.songs_fts MATCH ?1
+         ORDER BY f.rank
+         LIMIT ?2 OFFSET ?3",
     )
-    .bind(pat)
+    .bind(q)
     .bind(limit)
     .bind(offset)
     .fetch_all(pool)
