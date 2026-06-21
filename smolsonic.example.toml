@@ -1,0 +1,10 @@
+# smolsonic example configuration
+music_dir = "/path/to/your/music"
+username = "admin"
+password = "changeme"
+
+# Optional — defaults shown
+port = 4533
+host = "0.0.0.0"
+database_path = "smolsonic.db"
+covers_dir = "covers"

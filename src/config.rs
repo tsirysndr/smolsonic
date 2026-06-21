@@ -1,0 +1,50 @@
+use anyhow::{Context, Result};
+use serde::Deserialize;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Config {
+    pub music_dir: PathBuf,
+    pub username: String,
+    pub password: String,
+    #[serde(default = "default_port")]
+    pub port: u16,
+    #[serde(default = "default_host")]
+    pub host: String,
+    #[serde(default = "default_db_path")]
+    pub database_path: PathBuf,
+    #[serde(default = "default_covers_dir")]
+    pub covers_dir: PathBuf,
+}
+
+fn default_port() -> u16 {
+    4533
+}
+
+fn default_host() -> String {
+    "0.0.0.0".to_string()
+}
+
+fn default_db_path() -> PathBuf {
+    PathBuf::from("smolsonic.db")
+}
+
+fn default_covers_dir() -> PathBuf {
+    PathBuf::from("covers")
+}
+
+impl Config {
+    pub fn load(path: &Path) -> Result<Self> {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("reading config file {}", path.display()))?;
+        let cfg: Config = toml::from_str(&text)
+            .with_context(|| format!("parsing config file {}", path.display()))?;
+        if cfg.password.is_empty() {
+            anyhow::bail!("config: password must not be empty");
+        }
+        if cfg.username.is_empty() {
+            anyhow::bail!("config: username must not be empty");
+        }
+        Ok(cfg)
+    }
+}
