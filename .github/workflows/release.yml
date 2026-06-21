@@ -23,7 +23,7 @@ jobs:
       matrix:
         include:
           - label: macos-amd64
-            os: macos-13
+            os: macos-latest
             target: x86_64-apple-darwin
             use_cross: false
           - label: macos-aarch64
