@@ -30,18 +30,29 @@ your library.
   or `p=enc:<hex>`) both supported.
 - CORS is permissive — works directly from web clients.
 
+## Install
+
+Homebrew (macOS / Linux):
+
+```sh
+brew install tsirysndr/tap/smolsonic
+```
+
+Or build from source:
+
+```sh
+cargo build --release
+```
+
 ## Quick start
 
 ```sh
-# 1. Build
-cargo build --release
-
-# 2. Create a config
+# 1. Create a config
 cp smolsonic.example.toml smolsonic.toml
 $EDITOR smolsonic.toml      # set music_dir, username, password
 
-# 3. Run
-./target/release/smolsonic --config smolsonic.toml
+# 2. Run
+smolsonic --config smolsonic.toml
 ```
 
 On first launch smolsonic scans `music_dir`, creates the SQLite database, and
