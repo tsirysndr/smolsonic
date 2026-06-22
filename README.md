@@ -3,7 +3,7 @@
 
 A tiny, self-contained [Subsonic](http://www.subsonic.org/pages/api.jsp)-compatible
 music server written in Rust. Point it at a folder of music, give it a username
-and a password in a TOML file, and any Subsonic client can browse and stream
+and a password in a TOML file, and any [Subsonic client](https://www.navidrome.org/apps/) can browse and stream
 your library.
 
 ```
