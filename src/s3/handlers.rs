@@ -16,6 +16,9 @@ pub async fn list_buckets(
     req: HttpRequest,
     state: web::Data<S3State>,
 ) -> HttpResponse {
+    if !looks_like_s3_client(&req) {
+        return index_page();
+    }
     if let Err(e) = sigv4::verify(
         &req,
         EMPTY_BODY_SHA256,
@@ -34,6 +37,55 @@ pub async fn list_buckets(
 </ListAllMyBucketsResult>"#,
     );
     xml_ok(body)
+}
+
+fn looks_like_s3_client(req: &HttpRequest) -> bool {
+    if req.headers().contains_key("authorization") {
+        return true;
+    }
+    if req.headers().contains_key("x-amz-date") || req.headers().contains_key("x-amz-content-sha256")
+    {
+        return true;
+    }
+    let qs = req.query_string();
+    qs.contains("X-Amz-Algorithm=") || qs.contains("X-Amz-Signature=")
+}
+
+fn index_page() -> HttpResponse {
+    let body = format!(
+        "{banner}\n  smolsonic v{version} — S3-compatible API\n  bucket \"music\" maps 1:1 to your music_dir\n\n\
+Endpoints\n  \
+GET    /                       plain-text index (this page)\n  \
+GET    /music                  ListBuckets (XML)\n  \
+GET    /music?list-type=2      ListObjectsV2 (XML)\n                                 \
+query params: prefix=, delimiter=,\n                                 \
+continuation-token=, start-after=,\n                                 \
+max-keys= (1..1000)\n  \
+GET    /music/{{key}}            GetObject     — body=raw bytes, Range supported on GET\n  \
+HEAD   /music/{{key}}            HeadObject    — size + content-type\n  \
+PUT    /music/{{key}}            PutObject     — writes file under music_dir\n  \
+DELETE /music/{{key}}            DeleteObject  — removes file from music_dir\n\n\
+Auth\n  \
+AWS Signature V4 — region = \"us-east-1\", service = \"s3\".\n  \
+Payload signing modes accepted:\n    \
+- UNSIGNED-PAYLOAD                       (no body hashing)\n    \
+- <hex sha256 of body>                   (single-shot upload)\n    \
+- STREAMING-AWS4-HMAC-SHA256-PAYLOAD     (chunked upload)\n\n\
+Quick start (mc):\n  \
+mc alias set smol http://<host>:<port> <access_key> <secret_key> --api S3v4\n  \
+mc cp song.flac smol/music/Artist/Album/song.flac\n  \
+mc ls smol/music/\n  \
+mc rm smol/music/Artist/Album/song.flac\n\n\
+Quick start (aws-cli):\n  \
+aws --endpoint-url http://<host>:<port> \\\n      \
+s3 cp song.flac s3://music/Artist/Album/song.flac\n\n\
+Uploaded files are picked up by the filesystem watcher and indexed\nautomatically — they appear on the Subsonic side without a manual scan.\n",
+        banner = crate::cli::BANNER.trim_matches('\n'),
+        version = env!("CARGO_PKG_VERSION"),
+    );
+    HttpResponse::Ok()
+        .insert_header((header::CONTENT_TYPE, "text/plain; charset=utf-8"))
+        .body(body)
 }
 
 pub async fn list_objects(
