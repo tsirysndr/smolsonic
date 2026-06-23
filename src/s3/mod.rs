@@ -10,7 +10,10 @@ pub const BUCKET: &str = "music";
 pub const REGION: &str = "us-east-1";
 pub const SERVICE: &str = "s3";
 
+#[cfg(target_pointer_width = "64")]
 const MAX_UPLOAD: usize = 8 * 1024 * 1024 * 1024;
+#[cfg(not(target_pointer_width = "64"))]
+const MAX_UPLOAD: usize = 1024 * 1024 * 1024;
 
 pub struct S3State {
     pub music_dir: PathBuf,
