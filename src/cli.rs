@@ -67,17 +67,16 @@ pub fn print_banner(
 
     print!("{hot_pink}{BANNER}{reset}");
     println!(
-        "  {electric_cyan}listening{reset} {dim}→{reset} {neon_magenta}http://{host}:{port}{reset}"
-    );
-    println!(
-        "  {electric_cyan}library  {reset} {dim}→{reset} {electric_purple}{}{reset}",
-        music_dir.display()
+        "  {electric_cyan}subsonic{reset} {dim}→{reset} {neon_magenta}http://{host}:{port}{reset}"
     );
     if let Some((s3_host, s3_port)) = s3_endpoint {
         println!(
-            "  {electric_cyan}s3       {reset} {dim}→{reset} {sunset_yellow}http://{s3_host}:{s3_port}{reset}"
+            "  {electric_cyan}s3      {reset} {dim}→{reset} {sunset_yellow}http://{s3_host}:{s3_port}{reset}"
         );
     }
-    let _ = sunset_yellow;
+    println!(
+        "  {electric_cyan}library {reset} {dim}→{reset} {electric_purple}{}{reset}",
+        music_dir.display()
+    );
     println!();
 }
