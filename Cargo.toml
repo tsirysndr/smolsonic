@@ -30,3 +30,5 @@ futures = "0.3"
 hex = "0.4"
 clap = { version = "4", features = ["derive", "color"] }
 anstyle = "1"
+notify = "8"
+notify-debouncer-full = "0.7"

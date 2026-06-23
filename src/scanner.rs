@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::SystemTime;
 use walkdir::WalkDir;
 
-const AUDIO_EXTS: &[&str] = &[
+pub const AUDIO_EXTS: &[&str] = &[
     "mp3", "ogg", "flac", "m4a", "aac", "mp4", "alac", "wav", "wv", "mpc", "aiff", "aif", "opus",
     "ape", "wma",
 ];
@@ -82,11 +82,15 @@ enum ProcessResult {
     Skipped,
 }
 
-fn has_audio_extension(path: &Path) -> bool {
+pub fn has_audio_extension(path: &Path) -> bool {
     match path.extension().and_then(|s| s.to_str()) {
         Some(ext) => AUDIO_EXTS.iter().any(|e| e.eq_ignore_ascii_case(ext)),
         None => false,
     }
+}
+
+pub async fn upsert_file(pool: &Db, path: &Path, covers_dir: &Path) -> Result<()> {
+    process_file(pool, path, covers_dir).await.map(|_| ())
 }
 
 async fn process_file(pool: &Db, path: &Path, covers_dir: &Path) -> Result<ProcessResult> {

@@ -4,6 +4,7 @@ mod db;
 mod models;
 mod scanner;
 mod server;
+mod watcher;
 
 use anyhow::Result;
 use clap::Parser;
@@ -33,10 +34,20 @@ async fn main() -> Result<()> {
         let progress = scan_progress.clone();
         tokio::spawn(async move {
             tracing::info!("starting library scan of {}", music_dir.display());
-            if let Err(e) = scanner::scan(pool_c, music_dir, covers_dir, progress).await {
+            if let Err(e) = scanner::scan(
+                pool_c.clone(),
+                music_dir.clone(),
+                covers_dir.clone(),
+                progress,
+            )
+            .await
+            {
                 tracing::error!("scan failed: {e}");
             }
+            watcher::start(pool_c, music_dir, covers_dir);
         });
+    } else {
+        watcher::start(pool.clone(), cfg.music_dir.clone(), cfg.covers_dir.clone());
     }
 
     server::start(cfg, pool, scan_progress).await
