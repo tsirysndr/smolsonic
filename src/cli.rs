@@ -50,7 +50,12 @@ pub const BANNER: &str = r#"
                 a tiny Subsonic server in Rust
 "#;
 
-pub fn print_banner(host: &str, port: u16, music_dir: &std::path::Path) {
+pub fn print_banner(
+    host: &str,
+    port: u16,
+    music_dir: &std::path::Path,
+    s3_endpoint: Option<(&str, u16)>,
+) {
     // Synthwave 24-bit colors — match neon_styles().
     let hot_pink = "\x1b[1;38;2;255;42;109m";    // #ff2a6d
     let electric_cyan = "\x1b[1;38;2;5;217;232m"; // #05d9e8
@@ -68,6 +73,11 @@ pub fn print_banner(host: &str, port: u16, music_dir: &std::path::Path) {
         "  {electric_cyan}library  {reset} {dim}→{reset} {electric_purple}{}{reset}",
         music_dir.display()
     );
+    if let Some((s3_host, s3_port)) = s3_endpoint {
+        println!(
+            "  {electric_cyan}s3       {reset} {dim}→{reset} {sunset_yellow}http://{s3_host}:{s3_port}{reset}"
+        );
+    }
     let _ = sunset_yellow;
     println!();
 }

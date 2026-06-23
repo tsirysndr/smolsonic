@@ -8,3 +8,12 @@ port = 4533
 host = "0.0.0.0"
 database_path = "smolsonic.db"
 covers_dir = "covers"
+
+# Optional S3-compatible upload API.
+# Bucket name is fixed to "music" and region is "us-east-1".
+# [s3]
+# enabled = true
+# host = "0.0.0.0"
+# port = 9000
+# access_key = "smolsonic"
+# secret_key = "changeme-please"

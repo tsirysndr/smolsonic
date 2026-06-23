@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod db;
 mod models;
+mod s3;
 mod scanner;
 mod server;
 mod watcher;
@@ -22,7 +23,12 @@ async fn main() -> Result<()> {
     let args = cli::Cli::parse();
     let cfg = config::Config::load(&args.config)?;
 
-    cli::print_banner(&cfg.host, cfg.port, &cfg.music_dir);
+    let s3_endpoint = cfg
+        .s3
+        .as_ref()
+        .filter(|s| s.enabled)
+        .map(|s| (s.host.as_str(), s.port));
+    cli::print_banner(&cfg.host, cfg.port, &cfg.music_dir, s3_endpoint);
 
     let pool = db::init(&cfg.database_path).await?;
     let scan_progress = Arc::new(scanner::ScanProgress::default());
@@ -48,6 +54,17 @@ async fn main() -> Result<()> {
         });
     } else {
         watcher::start(pool.clone(), cfg.music_dir.clone(), cfg.covers_dir.clone());
+    }
+
+    if let Some(s3_cfg) = cfg.s3.clone() {
+        if s3_cfg.enabled {
+            let music_dir = cfg.music_dir.clone();
+            actix_web::rt::spawn(async move {
+                if let Err(e) = s3::start(s3_cfg, music_dir).await {
+                    tracing::error!("s3 server stopped: {e}");
+                }
+            });
+        }
     }
 
     server::start(cfg, pool, scan_progress).await

@@ -29,6 +29,8 @@ your library.
 - Subsonic **token auth** (`t = md5(password + salt)`) and plaintext (`p=…`
   or `p=enc:<hex>`) both supported.
 - CORS is permissive — works directly from web clients.
+- Optional **S3-compatible API** for uploading and deleting files in your
+  library with any S3 client (`aws`, `mc`, `boto3`, `rclone`, …).
 
 ## Install
 
@@ -73,6 +75,15 @@ port          = 4533
 host          = "0.0.0.0"
 database_path = "smolsonic.db"
 covers_dir    = "covers"
+
+# Optional S3-compatible upload API. Bucket name is fixed to "music",
+# region is "us-east-1".
+[s3]
+enabled    = true
+host       = "0.0.0.0"
+port       = 9000
+access_key = "smolsonic"
+secret_key = "changeme-please"
 ```
 
 | Key             | Purpose                                                   |
@@ -84,6 +95,48 @@ covers_dir    = "covers"
 | `host`          | Interface to bind (use `127.0.0.1` to keep it local).     |
 | `database_path` | Path to the SQLite file. Created if missing.              |
 | `covers_dir`    | Where extracted album art is cached.                      |
+| `[s3]`          | Optional S3 server section (see below).                   |
+
+### S3-compatible API
+
+`smolsonic` ships an embedded S3 gateway whose objects map 1:1 to files under
+`music_dir`. Uploads land on disk, then the built-in filesystem watcher picks
+them up and rescans them into the library automatically. Deletes work the same
+way — removing an object removes it from the library on the next debounce.
+
+The bucket is always `music` and the region is always `us-east-1` — they're
+not exposed in the config. The endpoint URL is whatever you bind in
+`[s3]`. Authentication uses AWS Signature V4 with the `access_key` and
+`secret_key` you set in the TOML file.
+
+Example with the MinIO client:
+
+```sh
+mc alias set smol http://localhost:9000 smolsonic changeme-please --api S3v4
+mc cp track.flac smol/music/Artist/Album/track.flac
+mc ls smol/music/
+mc rm smol/music/Artist/Album/track.flac
+```
+
+Or with `aws-cli`:
+
+```sh
+aws --endpoint-url http://localhost:9000 \
+    s3 cp track.flac s3://music/Artist/Album/track.flac
+```
+
+| Key          | Purpose                                                       |
+| ------------ | ------------------------------------------------------------- |
+| `enabled`    | Toggle the S3 server. Default `true` when the section exists. |
+| `host`       | Interface to bind for S3. Default `0.0.0.0`.                  |
+| `port`       | TCP port for the S3 server. Default `9000`.                   |
+| `access_key` | Required. The S3 access key clients must present.             |
+| `secret_key` | Required. The S3 secret key used to verify Sig V4 signatures. |
+
+Supported operations: `ListBuckets`, `ListObjectsV2` (with `prefix` and
+`delimiter`), `HeadObject`, `GetObject`, `PutObject`, `DeleteObject`. Streaming
+(`STREAMING-AWS4-HMAC-SHA256-PAYLOAD`), unsigned, and SHA-256-signed payloads
+are all accepted on uploads.
 
 ## CLI
 
@@ -170,12 +223,17 @@ src/
   db.rs              SqlitePool + schema migrations
   models.rs          Artist / Album / Song row types
   scanner.rs         walkdir + lofty + cover art extraction
+  watcher.rs         notify-based incremental library sync
   server/
     mod.rs           actix App + routing
     auth.rs          Subsonic token / plaintext auth
     response.rs      JSON envelope helpers
     repo.rs          sqlx queries
     handlers.rs      Subsonic endpoint handlers
+  s3/
+    mod.rs           actix App + routing for the S3 gateway
+    sigv4.rs         AWS Signature V4 verification + chunked-stream decode
+    handlers.rs      ListBuckets / ListObjectsV2 / Get / Put / Delete / Head
 ```
 
 ## License

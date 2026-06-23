@@ -15,6 +15,32 @@ pub struct Config {
     pub database_path: PathBuf,
     #[serde(default = "default_covers_dir")]
     pub covers_dir: PathBuf,
+    #[serde(default)]
+    pub s3: Option<S3Config>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct S3Config {
+    #[serde(default = "default_s3_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_s3_host")]
+    pub host: String,
+    #[serde(default = "default_s3_port")]
+    pub port: u16,
+    pub access_key: String,
+    pub secret_key: String,
+}
+
+fn default_s3_enabled() -> bool {
+    true
+}
+
+fn default_s3_host() -> String {
+    "0.0.0.0".to_string()
+}
+
+fn default_s3_port() -> u16 {
+    9000
 }
 
 fn default_port() -> u16 {
@@ -44,6 +70,16 @@ impl Config {
         }
         if cfg.username.is_empty() {
             anyhow::bail!("config: username must not be empty");
+        }
+        if let Some(s3) = &cfg.s3 {
+            if s3.enabled {
+                if s3.access_key.is_empty() {
+                    anyhow::bail!("config: s3.access_key must not be empty");
+                }
+                if s3.secret_key.is_empty() {
+                    anyhow::bail!("config: s3.secret_key must not be empty");
+                }
+            }
         }
         Ok(cfg)
     }
