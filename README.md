@@ -31,6 +31,8 @@ your library.
 - CORS is permissive — works directly from web clients.
 - Optional **S3-compatible API** for uploading and deleting files in your
   library with any S3 client (`aws`, `mc`, `boto3`, `rclone`, …).
+- **Zeroconf / mDNS** announcement so clients on the LAN discover the
+  server automatically (Subsonic, plus the S3 endpoint when enabled).
 
 ## Install
 
@@ -97,6 +99,11 @@ host       = "0.0.0.0"
 port       = 9000
 access_key = "smolsonic"
 secret_key = "changeme-please"
+
+# Optional Zeroconf/mDNS service broadcast. Enabled by default.
+[mdns]
+enabled       = true
+instance_name = "smolsonic"
 ```
 
 | Key             | Purpose                                                   |
@@ -109,6 +116,7 @@ secret_key = "changeme-please"
 | `database_path` | Path to the SQLite file. Created if missing.              |
 | `covers_dir`    | Where extracted album art is cached.                      |
 | `[s3]`          | Optional S3 server section (see below).                   |
+| `[mdns]`        | Optional Zeroconf/mDNS broadcast (see below).             |
 
 ### S3-compatible API
 
@@ -150,6 +158,32 @@ Supported operations: `ListBuckets`, `ListObjectsV2` (with `prefix` and
 `delimiter`), `HeadObject`, `GetObject`, `PutObject`, `DeleteObject`. Streaming
 (`STREAMING-AWS4-HMAC-SHA256-PAYLOAD`), unsigned, and SHA-256-signed payloads
 are all accepted on uploads.
+
+### Zeroconf / mDNS
+
+`smolsonic` announces itself on the local network so clients can discover the
+server without hard-coding an IP. Two service types are advertised:
+
+- `_subsonic._tcp.local.` — the Subsonic HTTP server, on `port`.
+- `_s3._tcp.local.` — the S3 gateway, on `[s3] port`. Only broadcast when
+  `[s3] enabled = true`.
+
+Only real LAN IPv4 addresses are broadcast. Loopback, link-local,
+the Docker default bridge (`172.17.0.0/16`), and virtual interfaces
+(`docker*`, `br-*`, `veth*`, `vboxnet*`, `vmnet*`, `virbr*`, `tun*`, `tap*`,
+`utun*`, `wg*`, `tailscale*`, `awdl*`, `bridge*`, …) are filtered out.
+
+| Key             | Purpose                                              |
+| --------------- | ---------------------------------------------------- |
+| `enabled`       | Toggle mDNS broadcast. Default `true`.               |
+| `instance_name` | Service instance name. Default `smolsonic`.          |
+
+Discover with `dns-sd` (macOS) or `avahi-browse` (Linux):
+
+```sh
+dns-sd -B _subsonic._tcp
+avahi-browse -r _subsonic._tcp
+```
 
 ## CLI
 
@@ -237,6 +271,7 @@ src/
   models.rs          Artist / Album / Song row types
   scanner.rs         walkdir + lofty + cover art extraction
   watcher.rs         notify-based incremental library sync
+  mdns.rs            Zeroconf/mDNS service broadcast
   server/
     mod.rs           actix App + routing
     auth.rs          Subsonic token / plaintext auth
