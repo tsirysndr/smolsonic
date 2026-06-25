@@ -31,6 +31,8 @@ your library.
 - CORS is permissive — works directly from web clients.
 - Optional **S3-compatible API** for uploading and deleting files in your
   library with any S3 client (`aws`, `mc`, `boto3`, `rclone`, …).
+- **Embedded S3 admin web UI** at `/admin/` of the S3 server — browse,
+  upload, and delete objects from your browser, no extra service needed.
 - **Zeroconf / mDNS** announcement so clients on the LAN discover the
   server automatically (Subsonic, plus the S3 endpoint when enabled).
 
@@ -155,9 +157,26 @@ aws --endpoint-url http://localhost:9000 \
 | `secret_key` | Required. The S3 secret key used to verify Sig V4 signatures. |
 
 Supported operations: `ListBuckets`, `ListObjectsV2` (with `prefix` and
-`delimiter`), `HeadObject`, `GetObject`, `PutObject`, `DeleteObject`. Streaming
-(`STREAMING-AWS4-HMAC-SHA256-PAYLOAD`), unsigned, and SHA-256-signed payloads
-are all accepted on uploads.
+`delimiter`), `HeadBucket`, `HeadObject`, `GetObject`, `PutObject`,
+`DeleteObject`. Streaming (`STREAMING-AWS4-HMAC-SHA256-PAYLOAD`), unsigned,
+and SHA-256-signed payloads are all accepted on uploads.
+
+### S3 admin web UI
+
+`smolsonic` also ships a React SPA embedded directly in the binary and
+served at `/admin/` of the S3 server. Sign in with the `access_key` /
+`secret_key` from your TOML config to browse the `music` bucket, upload
+new files, and delete existing ones — all from the browser. Requests are
+signed with AWS Signature V4 on the client side and hit the same S3
+endpoints documented above.
+
+![S3 admin web UI](.github/assets/s3admin.png)
+
+Open it at:
+
+```
+http://<s3-host>:<s3-port>/admin/
+```
 
 ### Zeroconf / mDNS
 
@@ -282,6 +301,8 @@ src/
     mod.rs           actix App + routing for the S3 gateway
     sigv4.rs         AWS Signature V4 verification + chunked-stream decode
     handlers.rs      ListBuckets / ListObjectsV2 / Get / Put / Delete / Head
+    admin.rs         rust-embed handler for the /admin/ SPA
+s3webui/             React + Vite admin SPA (built and embedded at release)
 ```
 
 ## License
