@@ -36,12 +36,85 @@
 
         src = craneLib.cleanCargoSource ./.;
 
+        # node_modules for the s3webui SPA. `bun install` needs the network,
+        # so dependency resolution lives in a fixed-output derivation. The
+        # hash pins the resolved tree across bun.lock.
+        #
+        # Updating: change package.json/bun.lock, run `nix build`, copy the
+        # hash Nix reports on mismatch into `outputHash` below.
+        s3webuiNodeModules = pkgs.stdenv.mkDerivation {
+          pname = "smolsonic-s3webui-node-modules";
+          version = "0.5.0";
+
+          src = lib.fileset.toSource {
+            root = ./s3webui;
+            fileset = lib.fileset.unions [
+              ./s3webui/package.json
+              ./s3webui/bun.lock
+            ];
+          };
+
+          nativeBuildInputs = [ pkgs.bun ];
+
+          dontConfigure = true;
+
+          buildPhase = ''
+            runHook preBuild
+            export HOME=$(mktemp -d)
+            bun install --frozen-lockfile --no-progress
+            runHook postBuild
+          '';
+
+          installPhase = ''
+            runHook preInstall
+            mv node_modules $out
+            runHook postInstall
+          '';
+
+          dontFixup = true;
+
+          outputHashMode = "recursive";
+          outputHashAlgo = "sha256";
+          outputHash = lib.fakeHash;
+        };
+
+        # Build the React SPA. The resulting `dist/` is embedded into the
+        # smolsonic binary at compile time via rust-embed.
+        s3webui = pkgs.stdenv.mkDerivation {
+          pname = "smolsonic-s3webui";
+          version = "0.5.0";
+
+          src = ./s3webui;
+
+          nativeBuildInputs = [ pkgs.bun ];
+
+          configurePhase = ''
+            runHook preConfigure
+            cp -r ${s3webuiNodeModules} node_modules
+            chmod -R u+w node_modules
+            export HOME=$(mktemp -d)
+            runHook postConfigure
+          '';
+
+          buildPhase = ''
+            runHook preBuild
+            bun run build
+            runHook postBuild
+          '';
+
+          installPhase = ''
+            runHook preInstall
+            cp -r dist $out
+            runHook postInstall
+          '';
+        };
+
         # Common arguments can be set here to avoid repeating them later
         commonArgs = {
           inherit src;
 
           pname = "smolsonic";
-          version = "0.4.0";
+          version = "0.5.0";
 
           nativeBuildInputs = [
             pkgs.pkg-config
@@ -53,6 +126,15 @@
           ] ++ lib.optionals pkgs.stdenv.isDarwin [
             pkgs.libiconv
           ];
+
+          # rust-embed reads s3webui/dist at compile time. cleanCargoSource
+          # strips the s3webui directory, so we drop the pre-built SPA back
+          # in before cargo runs.
+          preBuild = ''
+            mkdir -p s3webui
+            cp -r ${s3webui} s3webui/dist
+            chmod -R u+w s3webui/dist
+          '';
         };
 
         craneLibLLvmTools = craneLib.overrideToolchain
