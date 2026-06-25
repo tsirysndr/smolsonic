@@ -41,7 +41,7 @@
           inherit src;
 
           pname = "smolsonic";
-          version = "0.3.0";
+          version = "0.4.0";
 
           nativeBuildInputs = [
             pkgs.pkg-config
