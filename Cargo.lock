@@ -2093,7 +2093,7 @@ dependencies = [
 
 [[package]]
 name = "smolsonic"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "actix-cors",
  "actix-rt",
