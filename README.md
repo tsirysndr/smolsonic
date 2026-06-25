@@ -40,6 +40,19 @@ Homebrew (macOS / Linux):
 brew install tsirysndr/tap/smolsonic
 ```
 
+Nix flake:
+
+```sh
+# Run without installing
+nix run github:tsirysndr/smolsonic -- --config smolsonic.toml
+
+# Install into your profile
+nix profile install github:tsirysndr/smolsonic
+
+# Or drop into a dev shell with cargo + deps
+nix develop github:tsirysndr/smolsonic
+```
+
 Or build from source:
 
 ```sh
