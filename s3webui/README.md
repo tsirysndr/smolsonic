@@ -1,32 +1,93 @@
-# React + TypeScript + Vite
+# s3webui
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The admin web UI for [smolsonic](../README.md)'s embedded S3 gateway. A React
+SPA that lets you browse the `music` bucket, upload tracks, and delete objects
+straight from the browser — no extra service needed.
 
-Currently, two official plugins are available:
+The built bundle is embedded into the `smolsonic` Rust binary via
+[`rust-embed`](https://docs.rs/rust-embed) and served at `/admin/` of the S3
+server (see [`src/s3/admin.rs`](../src/s3/admin.rs)).
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## How it works
 
-## React Compiler
+- Talks to the S3 endpoint **directly** from the browser using the AWS SDK v3
+  (`@aws-sdk/client-s3`). There is no separate JSON API — every action is a
+  SigV4-signed S3 request.
+- Sign in with the `access_key` / `secret_key` from your `smolsonic.toml`.
+  Credentials are kept in memory (Jotai) and never sent anywhere except as
+  SigV4 signatures on outgoing S3 calls.
+- Routing via [`@tanstack/react-router`](https://tanstack.com/router) with
+  file-based routes under `src/routes/`. Styling is Tailwind v4 + FlyonUI.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Stack
 
-## Expanding the Oxlint configuration
+- React 19 + TypeScript + Vite
+- TanStack Router (file-based) + TanStack Query
+- Jotai for client state (auth session, UI toggles)
+- Tailwind CSS v4 + FlyonUI + Tabler Icons
+- AWS SDK v3 (`@aws-sdk/client-s3`, `@aws-sdk/s3-request-presigner`)
+- Oxlint
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+## Layout
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```
+src/
+  main.tsx              app entry
+  routes/               file-based routes (TanStack Router)
+    __root.tsx
+    _app.tsx            authed shell
+    _app.index.tsx      bucket browser
+    _app.browser.tsx
+    _app.upload.tsx     drag-and-drop multi-file upload
+    _app.settings.tsx
+    login.tsx           access-key / secret-key sign-in
+  components/           Sidebar, Topbar
+  atoms/                Jotai atoms (auth, ui)
+  lib/
+    s3.ts               AWS SDK client + helpers
+    format.ts
+  index.css
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## Development
+
+Run a `smolsonic` instance with the S3 server enabled, then start the dev
+server:
+
+```sh
+bun install
+bun run dev
+```
+
+Vite serves the SPA on `http://localhost:5173/admin/` and proxies `/music` to
+`http://localhost:9000` (override with `VITE_API_TARGET`). The proxy is
+configured with `changeOrigin: false` on purpose — the AWS SDK signs each
+request with the original `Host` header, so rewriting it would break the SigV4
+signature. See [`vite.config.ts`](./vite.config.ts).
+
+Sign in with the same `access_key` / `secret_key` you set under `[s3]` in
+`smolsonic.toml`.
+
+## Build
+
+```sh
+bun run build
+```
+
+`build` runs `tsr generate` (route tree), `tsc -b` (typecheck), then
+`vite build`. Output lands in `s3webui/dist/`, which the Rust crate embeds at
+compile time — so any change here ships with the next `cargo build` of
+`smolsonic`.
+
+## Scripts
+
+| Script           | What it does                                       |
+| ---------------- | -------------------------------------------------- |
+| `bun run dev`    | Vite dev server with HMR + S3 proxy.               |
+| `bun run build`  | Generate route tree, typecheck, build static SPA.  |
+| `bun run preview`| Serve the production build locally.                |
+| `bun run lint`   | Run Oxlint.                                        |
+
+## License
+
+MIT, same as the parent project.
