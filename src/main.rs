@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod db;
+mod mdns;
 mod models;
 mod s3;
 mod scanner;
@@ -66,6 +67,23 @@ async fn main() -> Result<()> {
             });
         }
     }
+
+    let _mdns_handle = if cfg.mdns.enabled {
+        let s3_endpoint = cfg
+            .s3
+            .as_ref()
+            .filter(|s| s.enabled)
+            .map(|s| (s.host.clone(), s.port));
+        match mdns::start(&cfg.mdns.instance_name, cfg.port, s3_endpoint) {
+            Ok(handle) => Some(handle),
+            Err(e) => {
+                tracing::warn!("mdns: disabled — {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     server::start(cfg, pool, scan_progress).await
 }

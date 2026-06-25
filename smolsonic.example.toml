@@ -9,6 +9,12 @@ host = "0.0.0.0"
 database_path = "smolsonic.db"
 covers_dir = "covers"
 
+# Optional — Zeroconf/mDNS service broadcast. Enabled by default.
+# Advertises smolsonic on the local network so clients can discover it.
+# [mdns]
+# enabled = true
+# instance_name = "smolsonic"
+
 # Optional S3-compatible upload API.
 # Bucket name is fixed to "music" and region is "us-east-1".
 # [s3]

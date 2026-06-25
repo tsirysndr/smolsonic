@@ -17,6 +17,33 @@ pub struct Config {
     pub covers_dir: PathBuf,
     #[serde(default)]
     pub s3: Option<S3Config>,
+    #[serde(default)]
+    pub mdns: MdnsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MdnsConfig {
+    #[serde(default = "default_mdns_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_mdns_instance")]
+    pub instance_name: String,
+}
+
+impl Default for MdnsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_mdns_enabled(),
+            instance_name: default_mdns_instance(),
+        }
+    }
+}
+
+fn default_mdns_enabled() -> bool {
+    true
+}
+
+fn default_mdns_instance() -> String {
+    "smolsonic".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]
