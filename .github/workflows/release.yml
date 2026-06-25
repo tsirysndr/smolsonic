@@ -57,6 +57,19 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install web UI dependencies
+        working-directory: s3webui
+        run: bun install --frozen-lockfile
+
+      - name: Build web UI
+        working-directory: s3webui
+        run: bun run build
+
       - name: Install cross
         if: matrix.use_cross
         run: cargo install cross --locked

@@ -37,3 +37,4 @@ notify = "8"
 notify-debouncer-full = "0.7"
 mdns-sd = "0.13"
 if-addrs = "0.13"
+rust-embed = { version = "8", features = ["interpolate-folder-path"] }

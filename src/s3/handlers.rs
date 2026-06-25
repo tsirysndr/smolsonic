@@ -39,6 +39,32 @@ pub async fn list_buckets(
     xml_ok(body)
 }
 
+pub async fn head_bucket(
+    req: HttpRequest,
+    path: web::Path<String>,
+    state: web::Data<S3State>,
+) -> HttpResponse {
+    let bucket = path.into_inner();
+    if bucket != BUCKET {
+        return HttpResponse::NotFound().finish();
+    }
+    if let Err(e) = sigv4::verify(
+        &req,
+        EMPTY_BODY_SHA256,
+        &state.access_key,
+        &state.secret_key,
+        REGION,
+        SERVICE,
+    ) {
+        return HttpResponse::Forbidden().reason(forbidden_reason(&e.0)).finish();
+    }
+    HttpResponse::Ok().finish()
+}
+
+fn forbidden_reason(_msg: &str) -> &'static str {
+    "Forbidden"
+}
+
 fn looks_like_s3_client(req: &HttpRequest) -> bool {
     if req.headers().contains_key("authorization") {
         return true;

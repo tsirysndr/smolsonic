@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod handlers;
 pub mod sigv4;
 
@@ -29,15 +30,20 @@ pub async fn start(cfg: S3Config, music_dir: PathBuf) -> anyhow::Result<()> {
         secret_key: Arc::new(cfg.secret_key),
     });
 
-    tracing::info!("starting S3 API on {addr} (bucket={BUCKET}, region={REGION})");
+    tracing::info!(
+        "starting S3 API on {addr} (bucket={BUCKET}, region={REGION}, admin UI at /admin)"
+    );
 
     HttpServer::new(move || {
         App::new()
             .app_data(state.clone())
             .app_data(web::PayloadConfig::new(MAX_UPLOAD))
+            .configure(admin::configure)
             .route("/", web::get().to(handlers::list_buckets))
             .route("/{bucket}", web::get().to(handlers::list_objects))
             .route("/{bucket}/", web::get().to(handlers::list_objects))
+            .route("/{bucket}", web::head().to(handlers::head_bucket))
+            .route("/{bucket}/", web::head().to(handlers::head_bucket))
             .route("/{bucket}/{key:.*}", web::get().to(handlers::get_object))
             .route("/{bucket}/{key:.*}", web::head().to(handlers::head_object))
             .route("/{bucket}/{key:.*}", web::put().to(handlers::put_object))
