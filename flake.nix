@@ -75,7 +75,7 @@
 
           outputHashMode = "recursive";
           outputHashAlgo = "sha256";
-          outputHash = lib.fakeHash;
+          outputHash = "sha256-o2L2xiKpLIKf/Mk+4IFuV0+EnFNVmkN4Zi5qEmN81mc=";
         };
 
         # Build the React SPA. The resulting `dist/` is embedded into the
