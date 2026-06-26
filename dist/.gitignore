@@ -1,0 +1,8 @@
+staging/
+rpmbuild/
+*.tar.gz
+*.tar.gz.sha256
+*.deb
+*.deb.sha256
+*.rpm
+*.rpm.sha256

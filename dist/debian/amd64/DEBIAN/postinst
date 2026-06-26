@@ -1,0 +1,31 @@
+#!/bin/bash
+set -e
+
+EXAMPLE_CFG=/usr/share/smolsonic/smolsonic.example.toml
+
+# Set up the systemd user service for the user who invoked the installation
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+    USER_UID=$(id -u "$SUDO_USER")
+
+    sudo -u "$SUDO_USER" mkdir -p \
+        "$USER_HOME/.config/smolsonic" \
+        "$USER_HOME/.local/share/smolsonic"
+
+    if [ ! -f "$USER_HOME/.config/smolsonic/smolsonic.toml" ] && [ -f "$EXAMPLE_CFG" ]; then
+        sudo -u "$SUDO_USER" cp "$EXAMPLE_CFG" "$USER_HOME/.config/smolsonic/smolsonic.toml"
+        echo "smolsonic: wrote example config to $USER_HOME/.config/smolsonic/smolsonic.toml"
+    fi
+
+    sudo -u "$SUDO_USER" XDG_RUNTIME_DIR=/run/user/$USER_UID \
+        systemctl --user daemon-reload || true
+
+    echo "smolsonic: edit ~/.config/smolsonic/smolsonic.toml, then start with:"
+    echo "  systemctl --user enable --now smolsonic.service"
+else
+    systemctl daemon-reload || true
+    echo "smolsonic: each user can enable the service with:"
+    echo "  systemctl --user enable --now smolsonic.service"
+fi
+
+exit 0

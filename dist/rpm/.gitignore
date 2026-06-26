@@ -1,0 +1,5 @@
+*.rpm
+amd64/usr/local/
+amd64/usr/share/
+arm64/usr/local/
+arm64/usr/share/

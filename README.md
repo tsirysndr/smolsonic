@@ -57,6 +57,51 @@ Homebrew (macOS / Linux):
 brew install tsirysndr/tap/smolsonic
 ```
 
+Debian / Ubuntu (`.deb` for `amd64`, `arm64`, `armhf`):
+
+```sh
+# From the Gemfury apt repo
+echo "deb [trusted=yes] https://apt.fury.io/tsiry/ /" \
+  | sudo tee /etc/apt/sources.list.d/smolsonic.list
+sudo apt-get update
+sudo apt-get install smolsonic
+
+# Or download a .deb directly from the release page
+curl -fsSLO https://github.com/tsirysndr/smolsonic/releases/latest/download/smolsonic_0.5.0_amd64.deb
+sudo dpkg -i smolsonic_0.5.0_amd64.deb
+```
+
+Fedora / RHEL (`.rpm` for `x86_64`, `aarch64`):
+
+```sh
+# From the Gemfury yum repo
+sudo tee /etc/yum.repos.d/smolsonic.repo <<'EOF'
+[smolsonic]
+name=smolsonic
+baseurl=https://yum.fury.io/tsiry/
+enabled=1
+gpgcheck=0
+EOF
+sudo dnf install smolsonic
+
+# Or download an .rpm directly from the release page
+curl -fsSLO https://github.com/tsirysndr/smolsonic/releases/latest/download/smolsonic-0.5.0-1.x86_64.rpm
+sudo rpm -i smolsonic-0.5.0-1.x86_64.rpm
+```
+
+The `.deb` / `.rpm` packages drop the binary at `/usr/local/bin/smolsonic`,
+an example config at `/usr/share/smolsonic/smolsonic.example.toml`, and a
+systemd user unit at `/usr/lib/systemd/user/smolsonic.service`. After
+install:
+
+```sh
+# Config was seeded for you — edit music_dir, username, password
+$EDITOR ~/.config/smolsonic/smolsonic.toml
+
+systemctl --user enable --now smolsonic.service
+systemctl --user status smolsonic.service
+```
+
 Nix flake:
 
 ```sh

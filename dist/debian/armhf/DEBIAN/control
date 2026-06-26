@@ -1,0 +1,13 @@
+Package: smolsonic
+Version: 0.5.0
+Section: sound
+Priority: optional
+Architecture: armhf
+Maintainer: Tsiry Sandratraina <tsiry.sndr@rocksky.app>
+Homepage: https://github.com/tsirysndr/smolsonic
+Depends: libc6
+Description: A tiny Subsonic-compatible music server written in Rust
+ smolsonic is a self-contained Subsonic-compatible music server. Point it at
+ a folder of music, give it a username and a password in a TOML file, and any
+ Subsonic client can browse and stream your library. Ships an optional
+ S3-compatible upload API and an embedded admin web UI.
