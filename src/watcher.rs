@@ -1,5 +1,5 @@
 use crate::db::Db;
-use crate::scanner::{has_audio_extension, upsert_file};
+use crate::scanner::{gc_album, gc_artist, has_audio_extension, upsert_file};
 use anyhow::Result;
 use notify::{EventKind, RecursiveMode};
 use notify_debouncer_full::new_debouncer;
@@ -137,34 +137,6 @@ async fn delete_songs_under(pool: &Db, dir: &str) -> Result<u64> {
         }
     }
     Ok(deleted)
-}
-
-async fn gc_album(pool: &Db, album_id: &str) -> Result<()> {
-    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM songs WHERE album_id = ?1")
-        .bind(album_id)
-        .fetch_one(pool)
-        .await?;
-    if remaining == 0 {
-        sqlx::query("DELETE FROM albums WHERE id = ?1")
-            .bind(album_id)
-            .execute(pool)
-            .await?;
-    }
-    Ok(())
-}
-
-async fn gc_artist(pool: &Db, artist_id: &str) -> Result<()> {
-    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM songs WHERE artist_id = ?1")
-        .bind(artist_id)
-        .fetch_one(pool)
-        .await?;
-    if remaining == 0 {
-        sqlx::query("DELETE FROM artists WHERE id = ?1")
-            .bind(artist_id)
-            .execute(pool)
-            .await?;
-    }
-    Ok(())
 }
 
 fn escape_like(s: &str) -> String {

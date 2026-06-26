@@ -22,6 +22,7 @@ pub struct ScanStats {
     pub inserted: usize,
     pub updated: usize,
     pub skipped: usize,
+    pub removed: usize,
 }
 
 #[derive(Debug, Default)]
@@ -65,15 +66,91 @@ pub async fn scan(
         }
     }
 
+    match reconcile_deletions(&pool).await {
+        Ok(removed) => stats.removed = removed as usize,
+        Err(e) => tracing::warn!("reconcile deletions: {e}"),
+    }
+
     progress.running.store(false, Ordering::SeqCst);
     tracing::info!(
-        "scan complete: {} scanned, {} inserted, {} updated, {} skipped",
+        "scan complete: {} scanned, {} inserted, {} updated, {} skipped, {} removed",
         stats.scanned,
         stats.inserted,
         stats.updated,
-        stats.skipped
+        stats.skipped,
+        stats.removed
     );
     Ok(stats)
+}
+
+pub async fn reconcile_deletions(pool: &Db) -> Result<u64> {
+    let rows: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT path, album_id, artist_id FROM songs")
+            .fetch_all(pool)
+            .await?;
+
+    let mut missing_paths = Vec::new();
+    let mut album_ids = std::collections::HashSet::new();
+    let mut artist_ids = std::collections::HashSet::new();
+    for (path, album_id, artist_id) in rows {
+        if !Path::new(&path).exists() {
+            missing_paths.push(path);
+            album_ids.insert(album_id);
+            artist_ids.insert(artist_id);
+        }
+    }
+
+    if missing_paths.is_empty() {
+        return Ok(0);
+    }
+
+    let mut tx = pool.begin().await?;
+    let mut deleted = 0u64;
+    for path in &missing_paths {
+        deleted += sqlx::query("DELETE FROM songs WHERE path = ?1")
+            .bind(path)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+    }
+    tx.commit().await?;
+
+    for album_id in &album_ids {
+        gc_album(pool, album_id).await?;
+    }
+    for artist_id in &artist_ids {
+        gc_artist(pool, artist_id).await?;
+    }
+
+    Ok(deleted)
+}
+
+pub async fn gc_album(pool: &Db, album_id: &str) -> Result<()> {
+    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM songs WHERE album_id = ?1")
+        .bind(album_id)
+        .fetch_one(pool)
+        .await?;
+    if remaining == 0 {
+        sqlx::query("DELETE FROM albums WHERE id = ?1")
+            .bind(album_id)
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+pub async fn gc_artist(pool: &Db, artist_id: &str) -> Result<()> {
+    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM songs WHERE artist_id = ?1")
+        .bind(artist_id)
+        .fetch_one(pool)
+        .await?;
+    if remaining == 0 {
+        sqlx::query("DELETE FROM artists WHERE id = ?1")
+            .bind(artist_id)
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
 }
 
 enum ProcessResult {

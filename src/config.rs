@@ -15,6 +15,8 @@ pub struct Config {
     pub database_path: PathBuf,
     #[serde(default = "default_covers_dir")]
     pub covers_dir: PathBuf,
+    #[serde(default = "default_scan_interval_secs")]
+    pub scan_interval_secs: u64,
     #[serde(default)]
     pub s3: Option<S3Config>,
     #[serde(default)]
@@ -84,6 +86,10 @@ fn default_db_path() -> PathBuf {
 
 fn default_covers_dir() -> PathBuf {
     PathBuf::from("covers")
+}
+
+fn default_scan_interval_secs() -> u64 {
+    300
 }
 
 impl Config {

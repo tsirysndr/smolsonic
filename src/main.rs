@@ -11,6 +11,8 @@ mod watcher;
 use anyhow::Result;
 use clap::Parser;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 #[actix_web::main]
 async fn main() -> Result<()> {
@@ -55,6 +57,37 @@ async fn main() -> Result<()> {
         });
     } else {
         watcher::start(pool.clone(), cfg.music_dir.clone(), cfg.covers_dir.clone());
+    }
+
+    if cfg.scan_interval_secs > 0 {
+        let pool_c = pool.clone();
+        let music_dir = cfg.music_dir.clone();
+        let covers_dir = cfg.covers_dir.clone();
+        let progress = scan_progress.clone();
+        let interval = Duration::from_secs(cfg.scan_interval_secs);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                if progress.running.load(Ordering::SeqCst) {
+                    tracing::debug!("rescan: previous scan still running, skipping tick");
+                    continue;
+                }
+                tracing::info!("periodic rescan of {}", music_dir.display());
+                if let Err(e) = scanner::scan(
+                    pool_c.clone(),
+                    music_dir.clone(),
+                    covers_dir.clone(),
+                    progress.clone(),
+                )
+                .await
+                {
+                    tracing::error!("periodic rescan failed: {e}");
+                }
+            }
+        });
     }
 
     if let Some(s3_cfg) = cfg.s3.clone() {
