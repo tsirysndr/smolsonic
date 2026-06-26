@@ -38,6 +38,19 @@ your library.
 
 ## Install
 
+Install script (macOS / Linux, amd64 / aarch64, plus linux armhf):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/tsirysndr/smolsonic/main/install.sh | sh
+```
+
+Pin a version or change the install directory with env vars:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/tsirysndr/smolsonic/main/install.sh \
+  | SMOLSONIC_VERSION=v0.5.0 SMOLSONIC_INSTALL=$HOME/.local/bin sh
+```
+
 Homebrew (macOS / Linux):
 
 ```sh
