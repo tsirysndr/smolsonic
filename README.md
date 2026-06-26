@@ -71,7 +71,7 @@ curl -fsSLO https://github.com/tsirysndr/smolsonic/releases/latest/download/smol
 sudo dpkg -i smolsonic_0.5.1_amd64.deb
 ```
 
-Fedora / RHEL (`.rpm` for `x86_64`, `aarch64`):
+Fedora / RHEL (`.rpm` for `x86_64`):
 
 ```sh
 # From the Gemfury yum repo

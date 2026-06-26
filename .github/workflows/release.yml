@@ -129,7 +129,7 @@ jobs:
           dpkg-deb --build --root-owner-group "$pkg_root" "dist/smolsonic_${version_no_v}_${deb_arch}.deb"
 
       - name: Build .rpm
-        if: startsWith(matrix.os, 'ubuntu') && (matrix.label == 'linux-amd64' || matrix.label == 'linux-aarch64')
+        if: matrix.label == 'linux-amd64'
         shell: bash
         run: |
           set -euo pipefail
@@ -139,10 +139,8 @@ jobs:
             version="${GITHUB_REF_NAME}"
           fi
           version_no_v="${version#v}"
-          case "${{ matrix.label }}" in
-            linux-amd64)   rpm_arch=amd64; rpm_target=x86_64  ;;
-            linux-aarch64) rpm_arch=arm64; rpm_target=aarch64 ;;
-          esac
+          rpm_arch=amd64
+          rpm_target=x86_64
           src_root="dist/rpm/${rpm_arch}"
           mkdir -p "${src_root}/usr/local/bin"
           install -m 0755 "target/${{ matrix.target }}/release/smolsonic" "${src_root}/usr/local/bin/smolsonic"
