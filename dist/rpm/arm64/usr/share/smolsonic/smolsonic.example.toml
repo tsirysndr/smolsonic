@@ -1,0 +1,25 @@
+# smolsonic example configuration
+music_dir = "/path/to/your/music"
+username = "admin"
+password = "changeme"
+
+# Optional — defaults shown
+port = 4533
+host = "0.0.0.0"
+database_path = "smolsonic.db"
+covers_dir = "covers"
+
+# Optional — Zeroconf/mDNS service broadcast. Enabled by default.
+# Advertises smolsonic on the local network so clients can discover it.
+# [mdns]
+# enabled = true
+# instance_name = "smolsonic"
+
+# Optional S3-compatible upload API.
+# Bucket name is fixed to "music" and region is "us-east-1".
+# [s3]
+# enabled = true
+# host = "0.0.0.0"
+# port = 9000
+# access_key = "smolsonic"
+# secret_key = "changeme-please"

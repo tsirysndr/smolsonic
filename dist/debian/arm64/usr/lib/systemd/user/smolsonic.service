@@ -1,0 +1,12 @@
+[Unit]
+Description=smolsonic Subsonic-compatible music server
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/smolsonic --config %h/.config/smolsonic/smolsonic.toml
+WorkingDirectory=%h/.local/share/smolsonic
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target

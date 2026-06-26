@@ -123,12 +123,8 @@ jobs:
             linux-armhf)   deb_arch=armhf ;;
           esac
           pkg_root="dist/debian/${deb_arch}"
-          mkdir -p "$pkg_root/usr/local/bin" \
-                   "$pkg_root/usr/share/smolsonic" \
-                   "$pkg_root/usr/lib/systemd/user"
+          mkdir -p "$pkg_root/usr/local/bin"
           install -m 0755 "target/${{ matrix.target }}/release/smolsonic" "$pkg_root/usr/local/bin/smolsonic"
-          install -m 0644 smolsonic.example.toml "$pkg_root/usr/share/smolsonic/smolsonic.example.toml"
-          install -m 0644 dist/rpm/amd64/usr/lib/systemd/user/smolsonic.service "$pkg_root/usr/lib/systemd/user/smolsonic.service"
           sed -i "s/^Version: .*/Version: ${version_no_v}/" "$pkg_root/DEBIAN/control"
           dpkg-deb --build --root-owner-group "$pkg_root" "dist/smolsonic_${version_no_v}_${deb_arch}.deb"
 
@@ -148,9 +144,8 @@ jobs:
             linux-aarch64) rpm_arch=arm64; rpm_target=aarch64 ;;
           esac
           src_root="dist/rpm/${rpm_arch}"
-          mkdir -p "${src_root}/usr/local/bin" "${src_root}/usr/share/smolsonic"
+          mkdir -p "${src_root}/usr/local/bin"
           install -m 0755 "target/${{ matrix.target }}/release/smolsonic" "${src_root}/usr/local/bin/smolsonic"
-          install -m 0644 smolsonic.example.toml "${src_root}/usr/share/smolsonic/smolsonic.example.toml"
           sed -i "s/^Version:        .*/Version:        ${version_no_v}/" "${src_root}/smolsonic.spec"
 
           rpm_top="$(pwd)/dist/rpmbuild"
