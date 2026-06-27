@@ -297,44 +297,54 @@ impl<'a> CommonLike<'a> {
 // ── Mappers ───────────────────────────────────────────────────────────────────
 
 fn song_to_child(s: &Song) -> Value {
-    json!({
-        "id": s.id,
-        "parent": s.album_id,
-        "isDir": false,
-        "title": s.title,
-        "album": s.album,
-        "artist": s.artist,
-        "track": s.track_number,
-        "year": s.year,
-        "genre": s.genre,
-        "coverArt": s.album_id,
-        "size": s.filesize,
-        "contentType": s.content_type,
-        "suffix": s.suffix,
-        "duration": s.duration_ms / 1000,
-        "bitRate": s.bitrate,
-        "path": s.path,
-        "isVideo": false,
-        "discNumber": s.disc_number,
-        "albumId": s.album_id,
-        "artistId": s.artist_id,
-        "type": "music",
-    })
+    let mut m = serde_json::Map::new();
+    m.insert("id".into(), json!(s.id));
+    m.insert("parent".into(), json!(s.album_id));
+    m.insert("isDir".into(), json!(false));
+    m.insert("title".into(), json!(s.title));
+    m.insert("album".into(), json!(s.album));
+    m.insert("artist".into(), json!(s.artist));
+    if let Some(t) = s.track_number {
+        m.insert("track".into(), json!(t));
+    }
+    if let Some(y) = s.year {
+        m.insert("year".into(), json!(y));
+    }
+    if let Some(g) = &s.genre {
+        m.insert("genre".into(), json!(g));
+    }
+    m.insert("coverArt".into(), json!(s.album_id));
+    m.insert("size".into(), json!(s.filesize));
+    m.insert("contentType".into(), json!(s.content_type));
+    m.insert("suffix".into(), json!(s.suffix));
+    m.insert("duration".into(), json!(s.duration_ms / 1000));
+    m.insert("bitRate".into(), json!(s.bitrate));
+    m.insert("path".into(), json!(s.path));
+    m.insert("isVideo".into(), json!(false));
+    if let Some(d) = s.disc_number {
+        m.insert("discNumber".into(), json!(d));
+    }
+    m.insert("albumId".into(), json!(s.album_id));
+    m.insert("artistId".into(), json!(s.artist_id));
+    m.insert("type".into(), json!("music"));
+    Value::Object(m)
 }
 
 fn album_to_child(a: &Album, song_count: i64, duration_s: i64) -> Value {
-    json!({
-        "id": a.id,
-        "name": a.title,
-        "title": a.title,
-        "artist": a.artist,
-        "artistId": a.artist_id,
-        "songCount": song_count,
-        "duration": duration_s,
-        "year": if a.year > 0 { json!(a.year) } else { Value::Null },
-        "coverArt": a.id,
-        "created": "2020-01-01T00:00:00Z",
-    })
+    let mut m = serde_json::Map::new();
+    m.insert("id".into(), json!(a.id));
+    m.insert("name".into(), json!(a.title));
+    m.insert("title".into(), json!(a.title));
+    m.insert("artist".into(), json!(a.artist));
+    m.insert("artistId".into(), json!(a.artist_id));
+    m.insert("songCount".into(), json!(song_count));
+    m.insert("duration".into(), json!(duration_s));
+    if a.year > 0 {
+        m.insert("year".into(), json!(a.year));
+    }
+    m.insert("coverArt".into(), json!(a.id));
+    m.insert("created".into(), json!("2020-01-01T00:00:00Z"));
+    Value::Object(m)
 }
 
 fn artist_to_json(a: &Artist, album_count: i64) -> Value {
@@ -518,20 +528,20 @@ pub async fn get_album(
     let songs = repo::songs_by_album(&state.pool, id).await.unwrap_or_default();
     let total_dur = songs.iter().map(|s| s.duration_ms / 1000).sum::<i64>();
     let song_jsons: Vec<Value> = songs.iter().map(song_to_child).collect();
-    response::ok_json(json!({
-        "album": {
-            "id": album.id,
-            "name": album.title,
-            "title": album.title,
-            "artist": album.artist,
-            "artistId": album.artist_id,
-            "coverArt": album.id,
-            "songCount": song_jsons.len(),
-            "duration": total_dur,
-            "year": if album.year > 0 { json!(album.year) } else { Value::Null },
-            "song": song_jsons,
-        }
-    }))
+    let mut a = serde_json::Map::new();
+    a.insert("id".into(), json!(album.id));
+    a.insert("name".into(), json!(album.title));
+    a.insert("title".into(), json!(album.title));
+    a.insert("artist".into(), json!(album.artist));
+    a.insert("artistId".into(), json!(album.artist_id));
+    a.insert("coverArt".into(), json!(album.id));
+    a.insert("songCount".into(), json!(song_jsons.len()));
+    a.insert("duration".into(), json!(total_dur));
+    if album.year > 0 {
+        a.insert("year".into(), json!(album.year));
+    }
+    a.insert("song".into(), json!(song_jsons));
+    response::ok_json(json!({ "album": Value::Object(a) }))
 }
 
 pub async fn get_song(
@@ -981,16 +991,18 @@ pub async fn get_music_directory(
         let children: Vec<Value> = albums
             .iter()
             .map(|a| {
-                json!({
-                    "id": a.id,
-                    "parent": artist.id,
-                    "isDir": true,
-                    "title": a.title,
-                    "album": a.title,
-                    "artist": a.artist,
-                    "year": if a.year > 0 { json!(a.year) } else { Value::Null },
-                    "coverArt": a.id,
-                })
+                let mut m = serde_json::Map::new();
+                m.insert("id".into(), json!(a.id));
+                m.insert("parent".into(), json!(artist.id));
+                m.insert("isDir".into(), json!(true));
+                m.insert("title".into(), json!(a.title));
+                m.insert("album".into(), json!(a.title));
+                m.insert("artist".into(), json!(a.artist));
+                if a.year > 0 {
+                    m.insert("year".into(), json!(a.year));
+                }
+                m.insert("coverArt".into(), json!(a.id));
+                Value::Object(m)
             })
             .collect();
         return response::ok_json(json!({
@@ -1264,17 +1276,18 @@ pub async fn update_now_playing(
 async fn playlist_json(state: &SubsonicState, pl: &crate::models::Playlist) -> Value {
     let songs = repo::playlist_songs(&state.pool, &pl.id).await.unwrap_or_default();
     let duration = songs.iter().map(|s| s.duration_ms / 1000).sum::<i64>();
-    json!({
-        "id": pl.id,
-        "name": pl.name,
-        "comment": pl.comment,
-        "songCount": songs.len(),
-        "duration": duration,
-        "public": pl.public != 0,
-        "created": pl.created_at,
-        "changed": pl.updated_at,
-        "coverArt": Value::Null,
-    })
+    let mut m = serde_json::Map::new();
+    m.insert("id".into(), json!(pl.id));
+    m.insert("name".into(), json!(pl.name));
+    if let Some(c) = &pl.comment {
+        m.insert("comment".into(), json!(c));
+    }
+    m.insert("songCount".into(), json!(songs.len()));
+    m.insert("duration".into(), json!(duration));
+    m.insert("public".into(), json!(pl.public != 0));
+    m.insert("created".into(), json!(pl.created_at));
+    m.insert("changed".into(), json!(pl.updated_at));
+    Value::Object(m)
 }
 
 pub async fn get_playlists(
@@ -1315,20 +1328,19 @@ pub async fn get_playlist(
     let songs = repo::playlist_songs(&state.pool, id).await.unwrap_or_default();
     let duration = songs.iter().map(|s| s.duration_ms / 1000).sum::<i64>();
     let entry: Vec<Value> = songs.iter().map(song_to_child).collect();
-    response::ok_json(json!({
-        "playlist": {
-            "id": pl.id,
-            "name": pl.name,
-            "comment": pl.comment,
-            "songCount": entry.len(),
-            "duration": duration,
-            "public": pl.public != 0,
-            "created": pl.created_at,
-            "changed": pl.updated_at,
-            "coverArt": Value::Null,
-            "entry": entry,
-        }
-    }))
+    let mut m = serde_json::Map::new();
+    m.insert("id".into(), json!(pl.id));
+    m.insert("name".into(), json!(pl.name));
+    if let Some(c) = &pl.comment {
+        m.insert("comment".into(), json!(c));
+    }
+    m.insert("songCount".into(), json!(entry.len()));
+    m.insert("duration".into(), json!(duration));
+    m.insert("public".into(), json!(pl.public != 0));
+    m.insert("created".into(), json!(pl.created_at));
+    m.insert("changed".into(), json!(pl.updated_at));
+    m.insert("entry".into(), json!(entry));
+    response::ok_json(json!({ "playlist": Value::Object(m) }))
 }
 
 pub async fn create_playlist(
@@ -1384,20 +1396,19 @@ pub async fn create_playlist(
     let songs = repo::playlist_songs(&state.pool, &id).await.unwrap_or_default();
     let duration = songs.iter().map(|s| s.duration_ms / 1000).sum::<i64>();
     let entry: Vec<Value> = songs.iter().map(song_to_child).collect();
-    response::ok_json(json!({
-        "playlist": {
-            "id": pl.id,
-            "name": pl.name,
-            "comment": pl.comment,
-            "songCount": entry.len(),
-            "duration": duration,
-            "public": pl.public != 0,
-            "created": pl.created_at,
-            "changed": pl.updated_at,
-            "coverArt": Value::Null,
-            "entry": entry,
-        }
-    }))
+    let mut m = serde_json::Map::new();
+    m.insert("id".into(), json!(pl.id));
+    m.insert("name".into(), json!(pl.name));
+    if let Some(c) = &pl.comment {
+        m.insert("comment".into(), json!(c));
+    }
+    m.insert("songCount".into(), json!(entry.len()));
+    m.insert("duration".into(), json!(duration));
+    m.insert("public".into(), json!(pl.public != 0));
+    m.insert("created".into(), json!(pl.created_at));
+    m.insert("changed".into(), json!(pl.updated_at));
+    m.insert("entry".into(), json!(entry));
+    response::ok_json(json!({ "playlist": Value::Object(m) }))
 }
 
 pub async fn update_playlist(
