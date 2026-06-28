@@ -86,12 +86,13 @@
 
           src = ./s3webui;
 
-          nativeBuildInputs = [ pkgs.bun ];
+          nativeBuildInputs = [ pkgs.bun pkgs.nodejs ];
 
           configurePhase = ''
             runHook preConfigure
             cp -r ${s3webuiNodeModules} node_modules
             chmod -R u+w node_modules
+            patchShebangs node_modules/.bin
             export HOME=$(mktemp -d)
             runHook postConfigure
           '';
