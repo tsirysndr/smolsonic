@@ -18,13 +18,13 @@ steps:
       cd s3webui
       bun install --frozen-lockfile
       bun run build
-  - name: build cli
-    command: |
-      cargo build --release --locked
-      ls -l target/release
   - name: nix build
     command: |
       nix --extra-experimental-features 'nix-command flakes' build .#default --print-build-logs
       ls -l result/bin
+  - name: build cli
+    command: |
+      cargo build --release --locked
+      ls -l target/release
 
 
