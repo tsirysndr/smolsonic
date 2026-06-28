@@ -10,7 +10,6 @@ dependencies:
   - rustc
   - rustfmt
   - gcc
-  - rust
   - bun
 
 steps:
