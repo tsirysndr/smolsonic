@@ -92,7 +92,7 @@
             runHook preConfigure
             cp -r ${s3webuiNodeModules} node_modules
             chmod -R u+w node_modules
-            patchShebangs node_modules/.bin
+            patchShebangs node_modules
             export HOME=$(mktemp -d)
             runHook postConfigure
           '';
