@@ -1,0 +1,26 @@
+when:
+  - event: ["push", "pull_request"]
+    branch: main
+
+engine: microvm
+image: nixos
+
+dependencies:
+  - cargo
+  - rustc
+  - rustfmt
+  - gcc
+  - rust
+  - bun
+
+steps:
+  - name: build webui
+    command: |
+      cd s3webui
+      bun install --frozen-lockfile
+      bun run build
+  - name: build cli
+    command: |
+      cargo build --release --locked
+      ls -l target/release
+
