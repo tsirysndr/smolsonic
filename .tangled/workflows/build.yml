@@ -24,3 +24,4 @@ steps:
       cargo build --release --locked
       ls -l target/release
 
+
