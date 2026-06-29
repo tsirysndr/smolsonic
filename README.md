@@ -36,9 +36,7 @@ browse and stream your library.
   library with any S3 client (`aws`, `mc`, `boto3`, `rclone`, …).
 - **Embedded S3 admin web UI** at `/admin/` of the S3 server — browse,
   upload, and delete objects from your browser, no extra service needed.
-- **Optional Jellyfin-compatible sidecar API** on its own port. Spoofs
-  `Version: 10.11.x` so the official Jellyfin Android app and SDK-generated
-  clients accept the server. Works with Finamp, Findroid, Streamyfin,
+- **Optional Jellyfin-compatible sidecar API** on its own port. Works with Finamp, Findroid, Streamyfin,
   Symfonium, Amcfy Music, and other native Jellyfin clients.
 - **Optional video library** scanned alongside music — direct-play streaming,
   ffmpeg-based thumbnail generation when no sibling poster exists.

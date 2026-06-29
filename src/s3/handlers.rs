@@ -12,6 +12,45 @@ use walkdir::WalkDir;
 const MAX_KEYS_DEFAULT: usize = 1000;
 const MAX_KEYS_CAP: usize = 1000;
 
+/// Pick the destination directory for a PUT based on the key's extension.
+/// Audio files (anything that isn't a known video extension) go to
+/// `music_dir`; videos go to `video_dir` if it's configured, otherwise they
+/// fall back to `music_dir` so PUT still succeeds.
+fn target_dir<'a>(state: &'a S3State, key: &str) -> &'a Path {
+    let ext = std::path::Path::new(key)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+    let is_video = ext
+        .as_deref()
+        .map(|e| crate::video_scanner::VIDEO_EXTS.contains(&e))
+        .unwrap_or(false);
+    if is_video {
+        state.video_dir.as_deref().unwrap_or(&state.music_dir)
+    } else {
+        &state.music_dir
+    }
+}
+
+/// Locate an existing file for the given key. Tries `music_dir` first, then
+/// `video_dir` if configured. Used by GET/HEAD/DELETE so clients can fetch
+/// or remove a file without knowing which dir it lives in.
+fn find_existing(state: &S3State, key: &str) -> Option<PathBuf> {
+    let m = resolve_key(&state.music_dir, key)?;
+    if m.exists() {
+        return Some(m);
+    }
+    if let Some(video_dir) = state.video_dir.as_deref() {
+        let v = resolve_key(video_dir, key)?;
+        if v.exists() {
+            return Some(v);
+        }
+    }
+    // Not found anywhere — return the music path so the caller can produce
+    // a stable NotFound error against a sensible filename.
+    Some(m)
+}
+
 pub async fn list_buckets(
     req: HttpRequest,
     state: web::Data<S3State>,
@@ -89,8 +128,8 @@ continuation-token=, start-after=,\n                                 \
 max-keys= (1..1000)\n  \
 GET    /music/{{key}}            GetObject     — body=raw bytes, Range supported on GET\n  \
 HEAD   /music/{{key}}            HeadObject    — size + content-type\n  \
-PUT    /music/{{key}}            PutObject     — writes file under music_dir\n  \
-DELETE /music/{{key}}            DeleteObject  — removes file from music_dir\n\n\
+PUT    /music/{{key}}            PutObject     — audio → music_dir, video → video_dir (by extension)\n  \
+DELETE /music/{{key}}            DeleteObject  — removes file from whichever dir holds it\n\n\
 Auth\n  \
 AWS Signature V4 — region = \"us-east-1\", service = \"s3\".\n  \
 Payload signing modes accepted:\n    \
@@ -155,10 +194,26 @@ pub async fn list_objects(
         start_after.clone()
     };
 
+    // Walk both roots so videos PUT via S3 show up in LIST too. Music wins
+    // on key collisions — same filename in both trees is rare in practice.
     let mut entries: Vec<FileEntry> = match collect_entries(&state.music_dir) {
         Ok(e) => e,
         Err(e) => return internal_error(&format!("list failed: {e}")),
     };
+    if let Some(video_dir) = state.video_dir.as_deref() {
+        match collect_entries(video_dir) {
+            Ok(v) => {
+                let seen: std::collections::HashSet<&str> =
+                    entries.iter().map(|e| e.key.as_str()).collect();
+                let extra: Vec<FileEntry> = v
+                    .into_iter()
+                    .filter(|e| !seen.contains(e.key.as_str()))
+                    .collect();
+                entries.extend(extra);
+            }
+            Err(e) => tracing::warn!("s3 list: video dir walk failed: {e}"),
+        }
+    }
     entries.sort_by(|a, b| a.key.cmp(&b.key));
 
     let mut contents = Vec::new();
@@ -274,7 +329,7 @@ pub async fn get_object(
         return forbidden(&e.0);
     }
 
-    let file_path = match resolve_key(&state.music_dir, &key) {
+    let file_path = match find_existing(&state, &key) {
         Some(p) => p,
         None => return bad_request("invalid key"),
     };
@@ -323,7 +378,7 @@ pub async fn head_object(
     ) {
         return forbidden(&e.0);
     }
-    let file_path = match resolve_key(&state.music_dir, &key) {
+    let file_path = match find_existing(&state, &key) {
         Some(p) => p,
         None => return bad_request("invalid key"),
     };
@@ -398,7 +453,8 @@ pub async fn put_object(
         body.to_vec()
     };
 
-    let file_path = match resolve_key(&state.music_dir, &key) {
+    let target = target_dir(&state, &key);
+    let file_path = match resolve_key(target, &key) {
         Some(p) => p,
         None => return bad_request("invalid key"),
     };
@@ -436,13 +492,25 @@ pub async fn delete_object(
     ) {
         return forbidden(&e.0);
     }
-    let file_path = match resolve_key(&state.music_dir, &key) {
+    let file_path = match find_existing(&state, &key) {
         Some(p) => p,
         None => return bad_request("invalid key"),
     };
+    // Figure out which root the file actually lives under so we clean up
+    // the right tree of empty parent dirs after deletion.
+    let root = if state
+        .video_dir
+        .as_deref()
+        .map(|v| file_path.starts_with(v))
+        .unwrap_or(false)
+    {
+        state.video_dir.as_deref().unwrap()
+    } else {
+        &state.music_dir
+    };
     match tokio::fs::remove_file(&file_path).await {
         Ok(_) => {
-            cleanup_empty_dirs(&state.music_dir, file_path.parent()).await;
+            cleanup_empty_dirs(root, file_path.parent()).await;
             HttpResponse::NoContent().finish()
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => HttpResponse::NoContent().finish(),

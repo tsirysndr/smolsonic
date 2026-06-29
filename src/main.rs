@@ -105,8 +105,9 @@ async fn main() -> Result<()> {
     if let Some(s3_cfg) = cfg.s3.clone() {
         if s3_cfg.enabled {
             let music_dir = cfg.music_dir.clone();
+            let video_dir = cfg.video.as_ref().map(|v| v.video_dir.clone());
             actix_web::rt::spawn(async move {
-                if let Err(e) = s3::start(s3_cfg, music_dir).await {
+                if let Err(e) = s3::start(s3_cfg, music_dir, video_dir).await {
                     tracing::error!("s3 server stopped: {e}");
                 }
             });
