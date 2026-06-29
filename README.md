@@ -56,7 +56,7 @@ Pin a version or change the install directory with env vars:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/tsirysndr/smolsonic/main/install.sh \
-  | SMOLSONIC_VERSION=v0.5.3 SMOLSONIC_INSTALL=$HOME/.local/bin sh
+  | SMOLSONIC_VERSION=v0.6.0 SMOLSONIC_INSTALL=$HOME/.local/bin sh
 ```
 
 Homebrew (macOS / Linux):
@@ -75,8 +75,8 @@ sudo apt-get update
 sudo apt-get install smolsonic
 
 # Or download a .deb directly from the release page
-curl -fsSLO https://github.com/tsirysndr/smolsonic/releases/latest/download/smolsonic_0.5.3_amd64.deb
-sudo dpkg -i smolsonic_0.5.3_amd64.deb
+curl -fsSLO https://github.com/tsirysndr/smolsonic/releases/latest/download/smolsonic_0.6.0_amd64.deb
+sudo dpkg -i smolsonic_0.6.0_amd64.deb
 ```
 
 Fedora / RHEL (`.rpm` for `x86_64`):
@@ -93,8 +93,8 @@ EOF
 sudo dnf install smolsonic
 
 # Or download an .rpm directly from the release page
-curl -fsSLO https://github.com/tsirysndr/smolsonic/releases/latest/download/smolsonic-0.5.3-1.x86_64.rpm
-sudo rpm -i smolsonic-0.5.3-1.x86_64.rpm
+curl -fsSLO https://github.com/tsirysndr/smolsonic/releases/latest/download/smolsonic-0.6.0-1.x86_64.rpm
+sudo rpm -i smolsonic-0.6.0-1.x86_64.rpm
 ```
 
 The `.deb` / `.rpm` packages drop the binary at `/usr/local/bin/smolsonic`,
