@@ -9,7 +9,7 @@ use crate::db::Db;
 use crate::scanner::ScanProgress;
 use crate::video_scanner::VideoScanProgress;
 use actix_cors::Cors;
-use actix_web::{web, App, HttpServer};
+use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -73,12 +73,30 @@ pub async fn start(
             .app_data(state.clone())
             .wrap(Cors::permissive())
             .configure(configure_routes)
+            .default_service(web::to(log_unrouted))
     })
     .bind(&addr)?
     .run()
     .await?;
 
     Ok(())
+}
+
+/// Log every request that no registered route matched. Lets us see exactly
+/// what URL a client (Moonfin, Findroid, etc.) hits when something appears
+/// missing — `tracing::warn!` so it shows up at default RUST_LOG level.
+async fn log_unrouted(req: HttpRequest) -> HttpResponse {
+    tracing::warn!(
+        "jellyfin: 404 {} {}{}",
+        req.method(),
+        req.path(),
+        if req.query_string().is_empty() {
+            String::new()
+        } else {
+            format!("?{}", req.query_string())
+        },
+    );
+    HttpResponse::NotFound().finish()
 }
 
 /// All Jellyfin routes. Extracted so tests can mount them on an
@@ -143,6 +161,24 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .route("/Items/Suggestions", web::get().to(handlers::empty_items))
         .route("/Items/Resume", web::get().to(handlers::empty_items))
         .route("/Items/Latest", web::get().to(handlers::items_latest))
+        .route("/Items/Prefixes", web::get().to(handlers::items_prefixes))
+        // Movie-detail rails Moonfin probes. We have no extras / similar /
+        // intros / chapter markers, so empty results are correct — but they
+        // must be ROUTED so they don't show up in the unrouted-404 log.
+        .route(
+            "/Items/{id}/SpecialFeatures",
+            web::get().to(handlers::empty_array),
+        )
+        .route(
+            "/Items/{id}/Ancestors",
+            web::get().to(handlers::empty_array),
+        )
+        .route("/Items/{id}/Similar", web::get().to(handlers::empty_items))
+        .route(
+            "/Users/{uid}/Items/{id}/Intros",
+            web::get().to(handlers::empty_items),
+        )
+        .route("/MediaSegments/{id}", web::get().to(handlers::empty_items))
         // Finamp / just_audio stream the original file via this endpoint,
         // passing the token as `?ApiKey=`. Routed before /Items/{id} so the
         // path parameter doesn't capture "{id}/File".
@@ -214,6 +250,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         // Artists
         .route("/Artists", web::get().to(handlers::artists))
         .route("/Artists/AlbumArtists", web::get().to(handlers::artists))
+        // Some clients ask for the artist alpha-jump rail via `/Artists/Prefixes`
+        // instead of `/Items/Prefixes?IncludeItemTypes=MusicArtist`. Same data.
+        .route("/Artists/Prefixes", web::get().to(handlers::artists_prefixes))
         .route("/Artists/{name}", web::get().to(handlers::artist_by_name))
         // Images — Findroid uses lowercase `/items/...` so we register both.
         .route(
@@ -319,7 +358,20 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             web::get().to(handlers::empty_array),
         )
         .route("/Genres", web::get().to(handlers::empty_items))
-        .route("/MusicGenres", web::get().to(handlers::empty_items));
+        .route("/MusicGenres", web::get().to(handlers::empty_items))
+        // /System/Ping is the canonical Jellyfin heartbeat — plain text body.
+        .route("/System/Ping", web::get().to(handlers::system_ping))
+        .route("/System/Ping", web::head().to(handlers::system_ping))
+        // Endpoints we deliberately 404 but want routed (no log noise):
+        //  - /socket: WebSocket live updates; clients fall back to polling
+        //  - /Moonfin/Ping: Moonfin's own client-side probe (not in spec)
+        //  - /Users/{id}/Images/*: no user avatars stored
+        .route("/socket", web::get().to(handlers::not_found))
+        .route("/Moonfin/Ping", web::get().to(handlers::not_found))
+        .route(
+            "/Users/{id}/Images/{kind}",
+            web::get().to(handlers::not_found),
+        );
 }
 
 #[cfg(test)]
@@ -489,6 +541,50 @@ mod tests {
         let artist_id = items["Items"][0]["Id"].as_str().unwrap().to_string();
         assert_eq!(items["Items"][0]["Name"], "Test Artist");
 
+        // Alpha-jump filter applies to artists / albums / songs alike. The
+        // fixture has "Test Artist" / "Test Album" / "Test Song" — all under
+        // T. So `NameStartsWith=T` returns 1 and `NameStartsWith=X` returns 0
+        // for each item type, including via the dedicated `/Artists` route.
+        for (uri, expected_t) in [
+            ("/Items?IncludeItemTypes=MusicArtist&NameStartsWith=T", 1),
+            ("/Items?IncludeItemTypes=MusicArtist&NameStartsWith=X", 0),
+            ("/Items?IncludeItemTypes=MusicAlbum&NameStartsWith=T", 1),
+            ("/Items?IncludeItemTypes=MusicAlbum&NameStartsWith=X", 0),
+            ("/Items?IncludeItemTypes=Audio&NameStartsWith=T", 1),
+            ("/Items?IncludeItemTypes=Audio&NameStartsWith=X", 0),
+            ("/Artists?NameStartsWith=T", 1),
+            ("/Artists?NameStartsWith=X", 0),
+        ] {
+            let req = test::TestRequest::get()
+                .uri(uri)
+                .insert_header(("X-Emby-Token", token.clone()))
+                .to_request();
+            let resp: Value = test::call_and_read_body_json(&app, req).await;
+            assert_eq!(resp["TotalRecordCount"], expected_t, "wrong count for {uri}");
+        }
+
+        // /Artists/Prefixes returns ["T"] for the fixture.
+        let req = test::TestRequest::get()
+            .uri("/Artists/Prefixes")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let prefixes: Value = test::call_and_read_body_json(&app, req).await;
+        let names: Vec<&str> = prefixes
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["Name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["T"]);
+
+        // /Items/Prefixes?IncludeItemTypes=MusicAlbum returns ["T"] too.
+        let req = test::TestRequest::get()
+            .uri("/Items/Prefixes?IncludeItemTypes=MusicAlbum")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let prefixes: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(prefixes[0]["Name"], "T");
+
         // List albums under that artist.
         let req = test::TestRequest::get()
             .uri(&format!("/Items?ParentId={artist_id}"))
@@ -596,6 +692,71 @@ mod tests {
         assert_eq!(movie["Type"], "Movie");
         assert_eq!(movie["MediaType"], "Video");
         let video_id = movie["Id"].as_str().unwrap().to_string();
+
+        // Same list via `IncludeItemTypes=Video` — some SDK consumers use the
+        // BaseItemKind enum value `Video` instead of `Movie`. Must NOT fall
+        // through to the artist list.
+        for uri in [
+            "/Items?IncludeItemTypes=Video",
+            "/Items?MediaTypes=Video",
+            "/Users/me/Items?IncludeItemTypes=Video&Recursive=true",
+        ] {
+            let req = test::TestRequest::get()
+                .uri(uri)
+                .insert_header(("X-Emby-Token", token.clone()))
+                .to_request();
+            let resp: Value = test::call_and_read_body_json(&app, req).await;
+            assert_eq!(resp["TotalRecordCount"], 1, "wrong count for {uri}");
+            assert_eq!(resp["Items"][0]["Type"], "Movie", "wrong type for {uri}");
+        }
+
+        // Alpha-jump rail: `?NameStartsWith=T` should narrow to titles
+        // starting with T (case-insensitive). The fixture inserts one movie
+        // "Test Movie" — "T" matches, "X" doesn't.
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=Movie&NameStartsWith=T")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let resp: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(resp["TotalRecordCount"], 1);
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=Movie&NameStartsWith=X")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let resp: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(resp["TotalRecordCount"], 0);
+
+        // /Items/Prefixes should report the letter "T" for the Movies lib.
+        let req = test::TestRequest::get()
+            .uri(&format!(
+                "/Items/Prefixes?ParentId={}",
+                mapping::movies_library_guid()
+            ))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let prefixes: Value = test::call_and_read_body_json(&app, req).await;
+        let names: Vec<&str> = prefixes
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["Name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["T"]);
+
+        // Moonfin taps the Movies library tile, which first fetches the
+        // library item itself as `/Users/{uid}/Items/{library_guid}`. Must
+        // return the CollectionFolder DTO, not 404.
+        let movies_lib = mapping::movies_library_guid();
+        let req = test::TestRequest::get()
+            .uri(&format!("/Users/me/Items/{movies_lib}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: Value = test::read_body_json(resp).await;
+        assert_eq!(body["Type"], "CollectionFolder");
+        assert_eq!(body["CollectionType"], "movies");
+        assert_eq!(body["Name"], "Movies");
 
         // HEAD on the video stream — direct play.
         let req = test::TestRequest::default()

@@ -36,6 +36,289 @@ pub async fn count_videos(pool: &Db) -> Result<i64> {
     Ok(n)
 }
 
+/// Build the WHERE clause for a `NameStartsWith` / `NameStartsWithOrGreater`
+/// / `NameLessThan` filter against `column`, plus the values that get bound
+/// for each `?n` placeholder. Returns an empty string when no filter is set.
+/// Used by every list endpoint that exposes Jellyfin's alpha-jump rail.
+fn name_filter_sql(
+    column: &str,
+    name_starts_with: Option<&str>,
+    name_starts_with_or_greater: Option<&str>,
+    name_less_than: Option<&str>,
+) -> (String, Vec<String>) {
+    let mut clauses: Vec<String> = Vec::new();
+    let mut binds: Vec<String> = Vec::new();
+    if let Some(prefix) = name_starts_with.filter(|s| !s.is_empty()) {
+        let escaped = prefix.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        binds.push(format!("{escaped}%"));
+        clauses.push(format!(
+            "{column} LIKE ?{} ESCAPE '\\' COLLATE NOCASE",
+            binds.len()
+        ));
+    }
+    if let Some(b) = name_starts_with_or_greater.filter(|s| !s.is_empty()) {
+        let first = b.chars().next().unwrap().to_string();
+        binds.push(first);
+        clauses.push(format!(
+            "UPPER(SUBSTR({column}, 1, 1)) >= UPPER(?{})",
+            binds.len()
+        ));
+    }
+    if let Some(b) = name_less_than.filter(|s| !s.is_empty()) {
+        let first = b.chars().next().unwrap().to_string();
+        binds.push(first);
+        clauses.push(format!(
+            "UPPER(SUBSTR({column}, 1, 1)) < UPPER(?{})",
+            binds.len()
+        ));
+    }
+    let where_sql = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", clauses.join(" AND "))
+    };
+    (where_sql, binds)
+}
+
+/// Distinct uppercase first letters of a name-style column, with non-alpha
+/// rows grouped under "#". Drives Jellyfin's alpha-jump rail.
+async fn name_prefixes(pool: &Db, table: &str, column: &str) -> Result<Vec<String>> {
+    let sql = format!(
+        "SELECT DISTINCT UPPER(SUBSTR({column}, 1, 1)) FROM {table} WHERE {column} != ''"
+    );
+    let rows: Vec<(String,)> = sqlx::query_as(&sql).fetch_all(pool).await?;
+    let mut letters: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut has_other = false;
+    for (c,) in rows {
+        match c.chars().next() {
+            Some(ch) if ch.is_ascii_alphabetic() => {
+                letters.insert(c);
+            }
+            _ => {
+                has_other = true;
+            }
+        }
+    }
+    let mut out: Vec<String> = letters.into_iter().collect();
+    if has_other {
+        out.insert(0, "#".to_string());
+    }
+    Ok(out)
+}
+
+pub async fn videos_filtered(
+    pool: &Db,
+    name_starts_with: Option<&str>,
+    name_starts_with_or_greater: Option<&str>,
+    name_less_than: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<Video>> {
+    let (where_sql, binds) = name_filter_sql(
+        "title",
+        name_starts_with,
+        name_starts_with_or_greater,
+        name_less_than,
+    );
+    let limit_idx = binds.len() + 1;
+    let offset_idx = binds.len() + 2;
+    let sql = format!(
+        "SELECT id, path, title, container, duration_ms, filesize, bitrate,
+                width, height, poster_path
+         FROM videos {where_sql} ORDER BY title COLLATE NOCASE
+         LIMIT ?{limit_idx} OFFSET ?{offset_idx}"
+    );
+    let mut q = sqlx::query_as::<_, Video>(&sql);
+    for b in &binds {
+        q = q.bind(b);
+    }
+    let rows = q.bind(limit).bind(offset).fetch_all(pool).await?;
+    Ok(rows)
+}
+
+pub async fn count_videos_filtered(
+    pool: &Db,
+    name_starts_with: Option<&str>,
+    name_starts_with_or_greater: Option<&str>,
+    name_less_than: Option<&str>,
+) -> Result<i64> {
+    let (where_sql, binds) = name_filter_sql(
+        "title",
+        name_starts_with,
+        name_starts_with_or_greater,
+        name_less_than,
+    );
+    let sql = format!("SELECT COUNT(*) FROM videos {where_sql}");
+    let mut q = sqlx::query_scalar::<_, i64>(&sql);
+    for b in &binds {
+        q = q.bind(b);
+    }
+    let n = q.fetch_one(pool).await?;
+    Ok(n)
+}
+
+pub async fn video_name_prefixes(pool: &Db) -> Result<Vec<String>> {
+    name_prefixes(pool, "videos", "title").await
+}
+
+pub async fn artist_name_prefixes(pool: &Db) -> Result<Vec<String>> {
+    name_prefixes(pool, "artists", "name").await
+}
+
+pub async fn album_name_prefixes(pool: &Db) -> Result<Vec<String>> {
+    name_prefixes(pool, "albums", "title").await
+}
+
+pub async fn song_name_prefixes(pool: &Db) -> Result<Vec<String>> {
+    name_prefixes(pool, "songs", "title").await
+}
+
+pub async fn artists_filtered(
+    pool: &Db,
+    name_starts_with: Option<&str>,
+    name_starts_with_or_greater: Option<&str>,
+    name_less_than: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<Artist>> {
+    let (where_sql, binds) = name_filter_sql(
+        "name",
+        name_starts_with,
+        name_starts_with_or_greater,
+        name_less_than,
+    );
+    let limit_idx = binds.len() + 1;
+    let offset_idx = binds.len() + 2;
+    let sql = format!(
+        "SELECT id, name FROM artists {where_sql}
+         ORDER BY name COLLATE NOCASE LIMIT ?{limit_idx} OFFSET ?{offset_idx}"
+    );
+    let mut q = sqlx::query_as::<_, Artist>(&sql);
+    for b in &binds {
+        q = q.bind(b);
+    }
+    let rows = q.bind(limit).bind(offset).fetch_all(pool).await?;
+    Ok(rows)
+}
+
+pub async fn count_artists_filtered(
+    pool: &Db,
+    name_starts_with: Option<&str>,
+    name_starts_with_or_greater: Option<&str>,
+    name_less_than: Option<&str>,
+) -> Result<i64> {
+    let (where_sql, binds) = name_filter_sql(
+        "name",
+        name_starts_with,
+        name_starts_with_or_greater,
+        name_less_than,
+    );
+    let sql = format!("SELECT COUNT(*) FROM artists {where_sql}");
+    let mut q = sqlx::query_scalar::<_, i64>(&sql);
+    for b in &binds {
+        q = q.bind(b);
+    }
+    Ok(q.fetch_one(pool).await?)
+}
+
+pub async fn albums_filtered(
+    pool: &Db,
+    name_starts_with: Option<&str>,
+    name_starts_with_or_greater: Option<&str>,
+    name_less_than: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<Album>> {
+    let (where_sql, binds) = name_filter_sql(
+        "title",
+        name_starts_with,
+        name_starts_with_or_greater,
+        name_less_than,
+    );
+    let limit_idx = binds.len() + 1;
+    let offset_idx = binds.len() + 2;
+    let sql = format!(
+        "SELECT id, title, artist, artist_id, year, cover_art FROM albums {where_sql}
+         ORDER BY title COLLATE NOCASE LIMIT ?{limit_idx} OFFSET ?{offset_idx}"
+    );
+    let mut q = sqlx::query_as::<_, Album>(&sql);
+    for b in &binds {
+        q = q.bind(b);
+    }
+    let rows = q.bind(limit).bind(offset).fetch_all(pool).await?;
+    Ok(rows)
+}
+
+pub async fn count_albums_filtered(
+    pool: &Db,
+    name_starts_with: Option<&str>,
+    name_starts_with_or_greater: Option<&str>,
+    name_less_than: Option<&str>,
+) -> Result<i64> {
+    let (where_sql, binds) = name_filter_sql(
+        "title",
+        name_starts_with,
+        name_starts_with_or_greater,
+        name_less_than,
+    );
+    let sql = format!("SELECT COUNT(*) FROM albums {where_sql}");
+    let mut q = sqlx::query_scalar::<_, i64>(&sql);
+    for b in &binds {
+        q = q.bind(b);
+    }
+    Ok(q.fetch_one(pool).await?)
+}
+
+pub async fn songs_filtered(
+    pool: &Db,
+    name_starts_with: Option<&str>,
+    name_starts_with_or_greater: Option<&str>,
+    name_less_than: Option<&str>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<Song>> {
+    let (where_sql, binds) = name_filter_sql(
+        "title",
+        name_starts_with,
+        name_starts_with_or_greater,
+        name_less_than,
+    );
+    let limit_idx = binds.len() + 1;
+    let offset_idx = binds.len() + 2;
+    let sql = format!(
+        "SELECT id, path, title, artist, artist_id, album, album_id, genre, track_number,
+                disc_number, year, duration_ms, bitrate, filesize, suffix, content_type, cover_art
+         FROM songs {where_sql} ORDER BY title COLLATE NOCASE
+         LIMIT ?{limit_idx} OFFSET ?{offset_idx}"
+    );
+    let mut q = sqlx::query_as::<_, Song>(&sql);
+    for b in &binds {
+        q = q.bind(b);
+    }
+    let rows = q.bind(limit).bind(offset).fetch_all(pool).await?;
+    Ok(rows)
+}
+
+pub async fn count_songs_filtered(
+    pool: &Db,
+    name_starts_with: Option<&str>,
+    name_starts_with_or_greater: Option<&str>,
+    name_less_than: Option<&str>,
+) -> Result<i64> {
+    let (where_sql, binds) = name_filter_sql(
+        "title",
+        name_starts_with,
+        name_starts_with_or_greater,
+        name_less_than,
+    );
+    let sql = format!("SELECT COUNT(*) FROM songs {where_sql}");
+    let mut q = sqlx::query_scalar::<_, i64>(&sql);
+    for b in &binds {
+        q = q.bind(b);
+    }
+    Ok(q.fetch_one(pool).await?)
+}
+
 pub async fn search_videos(pool: &Db, term: &str, limit: i64, offset: i64) -> Result<Vec<Video>> {
     // Simple LIKE search — videos don't have FTS like songs do.
     let pattern = format!("%{}%", term.replace('%', "\\%").replace('_', "\\_"));
