@@ -85,6 +85,7 @@ pub async fn start(
 /// `App::configure(configure_routes)` against an in-memory state.
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.route("/", web::get().to(handlers::index))
+        .route("/", web::head().to(handlers::index))
         // System
         .route(
             "/System/Info/Public",
@@ -278,6 +279,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             web::head().to(handlers::video_stream_ext),
         )
         // Sessions / scrobble
+        .route("/Sessions", web::get().to(handlers::sessions_list))
         .route(
             "/Sessions/Capabilities/Full",
             web::post().to(handlers::sessions_capabilities),

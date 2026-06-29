@@ -1547,6 +1547,13 @@ pub async fn sessions_capabilities(_user: AuthedUser) -> HttpResponse {
     HttpResponse::NoContent().finish()
 }
 
+/// `GET /Sessions?activeWithinSeconds=N` — Streamyfin polls this every few
+/// seconds. We don't track active sessions; an empty list keeps the client
+/// polling cleanly instead of 404-ing.
+pub async fn sessions_list(_user: AuthedUser) -> HttpResponse {
+    HttpResponse::Ok().json(Vec::<Value>::new())
+}
+
 pub async fn sessions_playing(_user: AuthedUser, _body: web::Json<Value>) -> HttpResponse {
     HttpResponse::NoContent().finish()
 }
