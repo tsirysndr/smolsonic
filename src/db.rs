@@ -104,6 +104,47 @@ async fn migrate(pool: &Db) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_playlist_songs_pl ON playlist_songs(playlist_id);
 
+        -- ── Videos ──────────────────────────────────────────────────────────
+        CREATE TABLE IF NOT EXISTS videos (
+            id            TEXT PRIMARY KEY,
+            path          TEXT NOT NULL UNIQUE,
+            title         TEXT NOT NULL,
+            container     TEXT NOT NULL,
+            duration_ms   INTEGER NOT NULL DEFAULT 0,
+            filesize      INTEGER NOT NULL DEFAULT 0,
+            bitrate       INTEGER NOT NULL DEFAULT 0,
+            width         INTEGER NOT NULL DEFAULT 0,
+            height        INTEGER NOT NULL DEFAULT 0,
+            poster_path   TEXT,
+            mtime         INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_videos_title ON videos(title);
+
+        -- ── Jellyfin sidecar ────────────────────────────────────────────────
+        CREATE TABLE IF NOT EXISTS jellyfin_meta (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS jellyfin_tokens (
+            token       TEXT PRIMARY KEY,
+            user_id     TEXT NOT NULL,
+            device_id   TEXT,
+            device_name TEXT,
+            client      TEXT,
+            created_at  TEXT NOT NULL
+        );
+
+        -- Reverse lookup from a 32-char hex GUID we emit to Jellyfin clients
+        -- back to the native Subsonic-style id (ar-…, al-…, so-…).
+        CREATE TABLE IF NOT EXISTS jf_guids (
+            guid      TEXT PRIMARY KEY,
+            kind      TEXT NOT NULL,
+            native_id TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_jf_guids_native ON jf_guids(kind, native_id);
+
         -- ── FTS5 full-text search ────────────────────────────────────────────
         CREATE VIRTUAL TABLE IF NOT EXISTS songs_fts USING fts5(
             id UNINDEXED, title, artist, album, genre,

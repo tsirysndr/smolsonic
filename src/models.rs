@@ -28,6 +28,20 @@ pub struct Playlist {
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
+pub struct Video {
+    pub id: String,
+    pub path: String,
+    pub title: String,
+    pub container: String,
+    pub duration_ms: i64,
+    pub filesize: i64,
+    pub bitrate: i64,
+    pub width: i64,
+    pub height: i64,
+    pub poster_path: Option<String>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
 pub struct Song {
     pub id: String,
     pub path: String,

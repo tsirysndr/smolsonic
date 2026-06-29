@@ -1,6 +1,57 @@
 use crate::db::Db;
-use crate::models::{Album, Artist, Playlist, Song};
+use crate::models::{Album, Artist, Playlist, Song, Video};
 use anyhow::Result;
+
+// ── Videos ──────────────────────────────────────────────────────────────────
+
+pub async fn all_videos(pool: &Db, limit: i64, offset: i64) -> Result<Vec<Video>> {
+    let rows = sqlx::query_as::<_, Video>(
+        "SELECT id, path, title, container, duration_ms, filesize, bitrate,
+                width, height, poster_path
+         FROM videos ORDER BY title COLLATE NOCASE LIMIT ?1 OFFSET ?2",
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn find_video(pool: &Db, id: &str) -> Result<Option<Video>> {
+    let row = sqlx::query_as::<_, Video>(
+        "SELECT id, path, title, container, duration_ms, filesize, bitrate,
+                width, height, poster_path
+         FROM videos WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn count_videos(pool: &Db) -> Result<i64> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM videos")
+        .fetch_one(pool)
+        .await?;
+    Ok(n)
+}
+
+pub async fn search_videos(pool: &Db, term: &str, limit: i64, offset: i64) -> Result<Vec<Video>> {
+    // Simple LIKE search — videos don't have FTS like songs do.
+    let pattern = format!("%{}%", term.replace('%', "\\%").replace('_', "\\_"));
+    let rows = sqlx::query_as::<_, Video>(
+        "SELECT id, path, title, container, duration_ms, filesize, bitrate,
+                width, height, poster_path
+         FROM videos WHERE title LIKE ?1 ESCAPE '\\'
+         ORDER BY title COLLATE NOCASE LIMIT ?2 OFFSET ?3",
+    )
+    .bind(pattern)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
 
 pub async fn all_artists(pool: &Db) -> Result<Vec<Artist>> {
     let rows = sqlx::query_as::<_, Artist>(
@@ -46,6 +97,42 @@ pub async fn find_album(pool: &Db, id: &str) -> Result<Option<Album>> {
     .fetch_optional(pool)
     .await?;
     Ok(row)
+}
+
+pub async fn all_songs_paginated(pool: &Db, limit: i64, offset: i64) -> Result<Vec<Song>> {
+    let rows = sqlx::query_as::<_, Song>(
+        "SELECT id, path, title, artist, artist_id, album, album_id, genre, track_number,
+                disc_number, year, duration_ms, bitrate, filesize, suffix, content_type, cover_art
+         FROM songs ORDER BY title COLLATE NOCASE LIMIT ?1 OFFSET ?2",
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn count_songs(pool: &Db) -> Result<i64> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM songs")
+        .fetch_one(pool)
+        .await?;
+    Ok(n)
+}
+
+pub async fn songs_by_artist(pool: &Db, artist_id: &str, limit: i64, offset: i64) -> Result<Vec<Song>> {
+    let rows = sqlx::query_as::<_, Song>(
+        "SELECT id, path, title, artist, artist_id, album, album_id, genre, track_number,
+                disc_number, year, duration_ms, bitrate, filesize, suffix, content_type, cover_art
+         FROM songs WHERE artist_id = ?1
+         ORDER BY album COLLATE NOCASE, disc_number, track_number
+         LIMIT ?2 OFFSET ?3",
+    )
+    .bind(artist_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
 }
 
 pub async fn songs_by_album(pool: &Db, album_id: &str) -> Result<Vec<Song>> {

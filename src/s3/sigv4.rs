@@ -373,3 +373,58 @@ fn find_crlf(buf: &[u8], from: usize) -> Option<usize> {
     }
     None
 }
+
+/// Test-only signer that mirrors `verify`'s canonical-request construction.
+/// Returns an `Authorization` header value for the given request shape.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments, dead_code)]
+pub fn sign_authorization(
+    method: &str,
+    path: &str,
+    query: &str,
+    headers: &[(&str, &str)],
+    signed_headers: &[&str],
+    body_sha256_hex: &str,
+    access_key: &str,
+    secret_key: &str,
+    region: &str,
+    service: &str,
+    amz_date: &str,
+    scope_date: &str,
+) -> String {
+    let mut header_lines = Vec::new();
+    let lowered: Vec<String> = signed_headers.iter().map(|s| s.to_ascii_lowercase()).collect();
+    for name in &lowered {
+        let value = headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| *v)
+            .unwrap_or("");
+        let trimmed = collapse_ws(value.trim());
+        header_lines.push(format!("{}:{}\n", name, trimmed));
+    }
+    let canonical_headers: String = header_lines.join("");
+    let signed_headers_str = lowered.join(";");
+    let canonical_request = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}",
+        method.to_ascii_uppercase(),
+        canonical_uri(path),
+        canonical_query_string(query),
+        canonical_headers,
+        signed_headers_str,
+        body_sha256_hex
+    );
+    let scope = format!("{}/{}/{}/aws4_request", scope_date, region, service);
+    let string_to_sign = format!(
+        "AWS4-HMAC-SHA256\n{}\n{}\n{}",
+        amz_date,
+        scope,
+        hex::encode(Sha256::digest(canonical_request.as_bytes()))
+    );
+    let signing_key = derive_signing_key(secret_key, scope_date, region, service);
+    let signature = hex::encode(hmac_sha256(&signing_key, string_to_sign.as_bytes()));
+    format!(
+        "AWS4-HMAC-SHA256 Credential={}/{}/{}/{}/aws4_request, SignedHeaders={}, Signature={}",
+        access_key, scope_date, region, service, signed_headers_str, signature
+    )
+}

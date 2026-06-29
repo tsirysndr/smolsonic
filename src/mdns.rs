@@ -4,6 +4,7 @@ use std::net::{IpAddr, Ipv4Addr};
 
 const SUBSONIC_SERVICE: &str = "_subsonic._tcp.local.";
 const S3_SERVICE: &str = "_s3._tcp.local.";
+const JELLYFIN_SERVICE: &str = "_jellyfin._tcp.local.";
 
 pub struct Handle {
     daemon: ServiceDaemon,
@@ -23,6 +24,7 @@ pub fn start(
     instance_name: &str,
     subsonic_port: u16,
     s3: Option<(String, u16)>,
+    jellyfin: Option<(String, u16, String)>,
 ) -> Result<Handle> {
     let ips = local_network_ips();
     if ips.is_empty() {
@@ -69,6 +71,29 @@ pub fn start(
         fullnames.push(s3_full);
         tracing::info!(
             "mdns: broadcasting {S3_SERVICE} as {s3_instance} on {ips:?}:{s3_port}"
+        );
+    }
+
+    if let Some((_, jellyfin_port, server_id)) = jellyfin {
+        let jellyfin_instance = format!("{instance_name}-jellyfin");
+        let mut txt = std::collections::HashMap::new();
+        txt.insert("ID".to_string(), server_id.clone());
+        let jellyfin_info = ServiceInfo::new(
+            JELLYFIN_SERVICE,
+            &jellyfin_instance,
+            &hostname,
+            ips.as_slice(),
+            jellyfin_port,
+            Some(txt),
+        )
+        .context("mdns: failed to build jellyfin ServiceInfo")?;
+        let jellyfin_full = jellyfin_info.get_fullname().to_string();
+        daemon
+            .register(jellyfin_info)
+            .context("mdns: failed to register jellyfin service")?;
+        fullnames.push(jellyfin_full);
+        tracing::info!(
+            "mdns: broadcasting {JELLYFIN_SERVICE} as {jellyfin_instance} on {ips:?}:{jellyfin_port} (ID={server_id})"
         );
     }
 

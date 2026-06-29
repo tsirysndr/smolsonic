@@ -20,7 +20,50 @@ pub struct Config {
     #[serde(default)]
     pub s3: Option<S3Config>,
     #[serde(default)]
+    pub jellyfin: Option<JellyfinConfig>,
+    #[serde(default)]
+    pub video: Option<VideoConfig>,
+    #[serde(default)]
     pub mdns: MdnsConfig,
+}
+
+/// Optional video library. Enabled only when this block is present in the
+/// TOML and `video_dir` is set. Surfaces through the Jellyfin sidecar as a
+/// second collection (`CollectionType="movies"`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct VideoConfig {
+    pub video_dir: PathBuf,
+    #[serde(default = "default_video_scan_interval_secs")]
+    pub scan_interval_secs: u64,
+    #[serde(default = "default_video_library_name")]
+    pub library_name: String,
+}
+
+fn default_video_scan_interval_secs() -> u64 {
+    300
+}
+
+fn default_video_library_name() -> String {
+    "Movies".to_string()
+}
+
+/// Jellyfin sidecar API. Enabled only when this block exists and `port` is
+/// set in the TOML. Omit the block entirely to disable.
+#[derive(Debug, Clone, Deserialize)]
+pub struct JellyfinConfig {
+    pub port: u16,
+    #[serde(default = "default_jellyfin_host")]
+    pub host: String,
+    #[serde(default = "default_jellyfin_server_name")]
+    pub server_name: String,
+}
+
+fn default_jellyfin_host() -> String {
+    "0.0.0.0".to_string()
+}
+
+fn default_jellyfin_server_name() -> String {
+    "smolsonic".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]
