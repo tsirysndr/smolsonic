@@ -1,5 +1,5 @@
 Name:           smolsonic
-Version:        0.6.1
+Version:        0.6.2
 Release:        1%{?dist}
 Summary:        A tiny Subsonic-compatible music server written in Rust
 
