@@ -44,7 +44,7 @@
         # hash Nix reports on mismatch into `outputHash` below.
         s3webuiNodeModules = pkgs.stdenv.mkDerivation {
           pname = "smolsonic-s3webui-node-modules";
-          version = "0.6.0";
+          version = "0.6.1";
 
           src = lib.fileset.toSource {
             root = ./s3webui;
@@ -75,14 +75,14 @@
 
           outputHashMode = "recursive";
           outputHashAlgo = "sha256";
-          outputHash = "sha256-o2L2xiKpLIKf/Mk+4IFuV0+EnFNVmkN4Zi5qEmN81mc=";
+          outputHash = "sha256-VuAM4wkTAL8kIE0KseAC79F4+qLbLzR4g3AWiQjwaT0=";
         };
 
         # Build the React SPA. The resulting `dist/` is embedded into the
         # smolsonic binary at compile time via rust-embed.
         s3webui = pkgs.stdenv.mkDerivation {
           pname = "smolsonic-s3webui";
-          version = "0.6.0";
+          version = "0.6.1";
 
           src = ./s3webui;
 
@@ -115,7 +115,7 @@
           inherit src;
 
           pname = "smolsonic";
-          version = "0.6.0";
+          version = "0.6.1";
 
           nativeBuildInputs = [
             pkgs.pkg-config
