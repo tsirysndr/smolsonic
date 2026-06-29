@@ -215,7 +215,12 @@ fn canonical_uri(path: &str) -> String {
     if path.is_empty() {
         return "/".to_string();
     }
-    uri_encode(path, false)
+    // `req.uri().path()` returns the path as it was on the wire — already
+    // percent-encoded. Re-encoding that directly would turn `%20` into `%2520`
+    // and mismatch the client's canonical request. Decode first, then
+    // single-encode per AWS S3 SigV4 rules (slashes preserved).
+    let decoded = percent_decode(path);
+    uri_encode(&decoded, false)
 }
 
 pub fn uri_encode(s: &str, encode_slash: bool) -> String {

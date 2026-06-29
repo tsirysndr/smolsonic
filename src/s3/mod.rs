@@ -410,6 +410,117 @@ mod tests {
     }
 
     #[actix_web::test]
+    async fn presigned_put_with_content_sha_only_in_query_validates() {
+        // Browser AWS SDK v3 sends X-Amz-Content-Sha256 as a query string
+        // parameter (not a header) on presigned PUTs. The server must still
+        // resolve it to UNSIGNED-PAYLOAD when verifying the signature.
+        let dir = tempdir("presigned-querysha");
+        let app = test::init_service(
+            App::new()
+                .app_data(build_state(dir.clone()))
+                .app_data(web::PayloadConfig::new(MAX_UPLOAD))
+                .configure(configure_routes),
+        )
+        .await;
+
+        let cred = format!("{ACCESS_KEY}%2F{SCOPE_DATE}%2F{REGION}%2F{SERVICE}%2Faws4_request");
+        let canonical_query = format!(
+            "X-Amz-Algorithm=AWS4-HMAC-SHA256\
+             &X-Amz-Content-Sha256=UNSIGNED-PAYLOAD\
+             &X-Amz-Credential={cred}\
+             &X-Amz-Date={AMZ_DATE}\
+             &X-Amz-Expires=900\
+             &X-Amz-SignedHeaders=host"
+        );
+
+        let auth = sigv4::sign_authorization(
+            "PUT",
+            "/music/browser.bin",
+            &canonical_query,
+            &[("host", HOST)],
+            &["host"],
+            sigv4::UNSIGNED_PAYLOAD,
+            ACCESS_KEY,
+            SECRET_KEY,
+            REGION,
+            SERVICE,
+            AMZ_DATE,
+            SCOPE_DATE,
+        );
+        let signature = auth.rsplit_once("Signature=").unwrap().1.to_string();
+
+        let payload = b"browser upload".to_vec();
+        let uri = format!(
+            "/music/browser.bin?{canonical_query}&X-Amz-Signature={signature}"
+        );
+        let req = test::TestRequest::put()
+            .uri(&uri)
+            .insert_header(("host", HOST))
+            .set_payload(payload.clone())
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(std::fs::read(dir.join("browser.bin")).unwrap(), payload);
+    }
+
+    #[actix_web::test]
+    async fn presigned_put_with_special_chars_in_key_validates() {
+        // Keys with spaces, brackets, etc. are percent-encoded in the URL. The
+        // server must canonicalize by decoding once and re-encoding once;
+        // otherwise `%20` becomes `%2520` and the signature never matches.
+        let dir = tempdir("presigned-special");
+        let app = test::init_service(
+            App::new()
+                .app_data(build_state(dir.clone()))
+                .app_data(web::PayloadConfig::new(MAX_UPLOAD))
+                .configure(configure_routes),
+        )
+        .await;
+
+        let raw_key = "Audiosoulz - Dancefloor [Music Video]-dZ1EU20GucM.m4v";
+        let encoded_key = sigv4::uri_encode(raw_key, false);
+        let signing_path = format!("/music/{}", encoded_key);
+
+        let cred = format!("{ACCESS_KEY}%2F{SCOPE_DATE}%2F{REGION}%2F{SERVICE}%2Faws4_request");
+        let canonical_query = format!(
+            "X-Amz-Algorithm=AWS4-HMAC-SHA256\
+             &X-Amz-Content-Sha256=UNSIGNED-PAYLOAD\
+             &X-Amz-Credential={cred}\
+             &X-Amz-Date={AMZ_DATE}\
+             &X-Amz-Expires=900\
+             &X-Amz-SignedHeaders=host"
+        );
+
+        let auth = sigv4::sign_authorization(
+            "PUT",
+            &format!("/music/{raw_key}"),
+            &canonical_query,
+            &[("host", HOST)],
+            &["host"],
+            sigv4::UNSIGNED_PAYLOAD,
+            ACCESS_KEY,
+            SECRET_KEY,
+            REGION,
+            SERVICE,
+            AMZ_DATE,
+            SCOPE_DATE,
+        );
+        let signature = auth.rsplit_once("Signature=").unwrap().1.to_string();
+
+        let payload = b"video bytes".to_vec();
+        let uri = format!("{signing_path}?{canonical_query}&X-Amz-Signature={signature}");
+        let req = test::TestRequest::put()
+            .uri(&uri)
+            .insert_header(("host", HOST))
+            .set_payload(payload.clone())
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        // No video_dir configured in build_state → falls back to music_dir.
+        assert_eq!(std::fs::read(dir.join(raw_key)).unwrap(), payload);
+    }
+
+    #[actix_web::test]
     async fn put_with_wrong_payload_sha_returns_bad_request() {
         let dir = tempdir("badsha");
         let app = test::init_service(

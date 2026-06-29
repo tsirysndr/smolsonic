@@ -418,12 +418,23 @@ pub async fn put_object(
         return no_such_bucket(&bucket);
     }
 
+    // Browser AWS SDK v3 presigned PUTs put X-Amz-Content-Sha256 in the query
+    // string instead of a header. Fall back there, and default to
+    // UNSIGNED-PAYLOAD for presigned requests so the canonical request's
+    // body-hash line matches what the client signed.
     let content_sha = req
         .headers()
         .get("x-amz-content-sha256")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
+        .map(|s| s.to_string())
+        .or_else(|| parse_query(req.query_string()).remove("X-Amz-Content-Sha256"))
+        .unwrap_or_else(|| {
+            if req.query_string().contains("X-Amz-Algorithm=") {
+                UNSIGNED_PAYLOAD.to_string()
+            } else {
+                String::new()
+            }
+        });
 
     // The Authorization signature is computed over the value of x-amz-content-sha256.
     if let Err(e) = sigv4::verify(
