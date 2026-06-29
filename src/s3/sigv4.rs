@@ -244,6 +244,8 @@ fn canonical_query_string(qs: &str) -> String {
         return String::new();
     }
     // Parse the raw query into (encoded-name, encoded-value) pairs that we then sort.
+    // X-Amz-Signature is excluded: for presigned URLs it is added AFTER the canonical
+    // query string is built, so including it here would never match the client's signature.
     let mut entries: Vec<(String, String)> = Vec::new();
     for pair in qs.split('&') {
         if pair.is_empty() {
@@ -254,6 +256,9 @@ fn canonical_query_string(qs: &str) -> String {
             None => (pair, ""),
         };
         let dk = percent_decode(k);
+        if dk == "X-Amz-Signature" {
+            continue;
+        }
         let dv = percent_decode(v);
         entries.push((uri_encode(&dk, true), uri_encode(&dv, true)));
     }

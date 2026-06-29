@@ -355,6 +355,61 @@ mod tests {
     }
 
     #[actix_web::test]
+    async fn presigned_put_with_signature_in_query_validates() {
+        let dir = tempdir("presigned");
+        let app = test::init_service(
+            App::new()
+                .app_data(build_state(dir.clone()))
+                .app_data(web::PayloadConfig::new(MAX_UPLOAD))
+                .configure(configure_routes),
+        )
+        .await;
+
+        // Canonical query for a presigned PUT: alphabetically sorted, percent-encoded,
+        // and WITHOUT X-Amz-Signature. The signature is appended only after the
+        // canonical query is hashed — including it during verification would
+        // always produce a mismatch (the bug this regression test guards against).
+        let cred = format!("{ACCESS_KEY}%2F{SCOPE_DATE}%2F{REGION}%2F{SERVICE}%2Faws4_request");
+        let canonical_query = format!(
+            "X-Amz-Algorithm=AWS4-HMAC-SHA256\
+             &X-Amz-Credential={cred}\
+             &X-Amz-Date={AMZ_DATE}\
+             &X-Amz-Expires=900\
+             &X-Amz-SignedHeaders=host"
+        );
+
+        let auth = sigv4::sign_authorization(
+            "PUT",
+            "/music/presigned.bin",
+            &canonical_query,
+            &[("host", HOST)],
+            &["host"],
+            sigv4::UNSIGNED_PAYLOAD,
+            ACCESS_KEY,
+            SECRET_KEY,
+            REGION,
+            SERVICE,
+            AMZ_DATE,
+            SCOPE_DATE,
+        );
+        let signature = auth.rsplit_once("Signature=").unwrap().1.to_string();
+
+        let payload = b"presigned upload".to_vec();
+        let uri = format!(
+            "/music/presigned.bin?{canonical_query}&X-Amz-Signature={signature}"
+        );
+        let req = test::TestRequest::put()
+            .uri(&uri)
+            .insert_header(("host", HOST))
+            .insert_header(("x-amz-content-sha256", sigv4::UNSIGNED_PAYLOAD))
+            .set_payload(payload.clone())
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(std::fs::read(dir.join("presigned.bin")).unwrap(), payload);
+    }
+
+    #[actix_web::test]
     async fn put_with_wrong_payload_sha_returns_bad_request() {
         let dir = tempdir("badsha");
         let app = test::init_service(
