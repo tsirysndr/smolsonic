@@ -1,4 +1,4 @@
-use crate::models::{Album, Artist, Song, Video};
+use crate::models::{Album, Artist, Playlist, Song, Video};
 use crate::server::repo;
 use actix_web::{web, HttpRequest, HttpResponse};
 use chrono::Utc;
@@ -9,9 +9,9 @@ use std::path::PathBuf;
 use super::auth::{self, AuthedUser, EmbyAuth};
 use super::dto::{
     AuthenticationResult, BaseItemDto, ImageBlurHashes, ImageTags, ItemsResult, MediaSource,
-    MediaStream, NameGuidPair, PlaybackInfoResponse, PublicSystemInfo, SessionInfoDto,
-    SystemInfo, UserConfiguration, UserDto, UserItemDataDto, UserPolicy, ViewsResult,
-    JELLYFIN_API_VERSION,
+    MediaStream, NameGuidPair, PlaybackInfoResponse, PlaylistCreationResult, PublicSystemInfo,
+    SessionInfoDto, SystemInfo, UserConfiguration, UserDto, UserItemDataDto, UserPolicy,
+    ViewsResult, JELLYFIN_API_VERSION,
 };
 use super::mapping;
 use super::JellyfinState;
@@ -75,9 +75,9 @@ fn jellyfin_os_name() -> &'static str {
         "android" => "Android",
         "ios" => "iOS",
         other => match other.chars().next() {
-            Some(c) if c.is_ascii_lowercase() => Box::leak(
-                format!("{}{}", c.to_ascii_uppercase(), &other[1..]).into_boxed_str(),
-            ),
+            Some(c) if c.is_ascii_lowercase() => {
+                Box::leak(format!("{}{}", c.to_ascii_uppercase(), &other[1..]).into_boxed_str())
+            }
             _ => other,
         },
     }
@@ -95,10 +95,7 @@ fn public_info(state: &JellyfinState, req: &HttpRequest) -> PublicSystemInfo {
     }
 }
 
-pub async fn system_info_public(
-    state: web::Data<JellyfinState>,
-    req: HttpRequest,
-) -> HttpResponse {
+pub async fn system_info_public(state: web::Data<JellyfinState>, req: HttpRequest) -> HttpResponse {
     HttpResponse::Ok().json(public_info(&state, &req))
 }
 
@@ -140,10 +137,7 @@ pub async fn system_info(
     HttpResponse::Ok().json(info)
 }
 
-pub async fn system_endpoint(
-    _user: AuthedUser,
-    req: HttpRequest,
-) -> HttpResponse {
+pub async fn system_endpoint(_user: AuthedUser, req: HttpRequest) -> HttpResponse {
     let info = req.connection_info();
     let addr = info.realip_remote_addr().unwrap_or("");
     HttpResponse::Ok().json(json!({
@@ -200,14 +194,8 @@ pub async fn authenticate_by_name(
     let parsed = parse_auth(&req);
     let token = auth::random_hex(16);
     let now = now_iso();
-    if let Err(e) = auth::store_token(
-        &state.pool,
-        &token,
-        state.user_id.as_str(),
-        &parsed,
-        &now,
-    )
-    .await
+    if let Err(e) =
+        auth::store_token(&state.pool, &token, state.user_id.as_str(), &parsed, &now).await
     {
         tracing::error!("jellyfin: store_token: {e}");
         return HttpResponse::InternalServerError().finish();
@@ -265,17 +253,11 @@ pub async fn users_public(state: web::Data<JellyfinState>) -> HttpResponse {
     HttpResponse::Ok().json(vec![build_user(&state)])
 }
 
-pub async fn users_list(
-    _user: AuthedUser,
-    state: web::Data<JellyfinState>,
-) -> HttpResponse {
+pub async fn users_list(_user: AuthedUser, state: web::Data<JellyfinState>) -> HttpResponse {
     HttpResponse::Ok().json(vec![build_user(&state)])
 }
 
-pub async fn users_me(
-    _user: AuthedUser,
-    state: web::Data<JellyfinState>,
-) -> HttpResponse {
+pub async fn users_me(_user: AuthedUser, state: web::Data<JellyfinState>) -> HttpResponse {
     HttpResponse::Ok().json(build_user(&state))
 }
 
@@ -340,10 +322,7 @@ pub async fn user_views(
     })
 }
 
-pub async fn media_folders(
-    _user: AuthedUser,
-    state: web::Data<JellyfinState>,
-) -> HttpResponse {
+pub async fn media_folders(_user: AuthedUser, state: web::Data<JellyfinState>) -> HttpResponse {
     let views = all_library_views(&state);
     let total = views.len() as i32;
     HttpResponse::Ok().json(ViewsResult {
@@ -495,7 +474,11 @@ async fn album_to_dto(state: &JellyfinState, al: &Album) -> BaseItemDto {
         item_type: "MusicAlbum",
         media_type: "Unknown",
         is_folder: Some(true),
-        production_year: if al.year > 0 { Some(al.year as i32) } else { None },
+        production_year: if al.year > 0 {
+            Some(al.year as i32)
+        } else {
+            None
+        },
         premiere_date: if al.year > 0 {
             Some(format!("{:04}-01-01T00:00:00.0000000", al.year))
         } else {
@@ -639,6 +622,47 @@ async fn song_to_dto(state: &JellyfinState, s: &Song) -> BaseItemDto {
     }
 }
 
+async fn playlist_to_dto(state: &JellyfinState, p: &Playlist) -> BaseItemDto {
+    let id = mapping::remember_playlist(&state.pool, p)
+        .await
+        .unwrap_or_else(|_| mapping::guid(mapping::KIND_PLAYLIST, &p.id));
+    let songs = repo::playlist_songs(&state.pool, &p.id)
+        .await
+        .unwrap_or_default();
+    let child_count = songs.len() as i32;
+    let run_time_ticks: i64 = songs.iter().map(|s| s.duration_ms * TICKS_PER_MS).sum();
+    BaseItemDto {
+        id: id.clone(),
+        server_id: Some(state.server_id.clone()),
+        name: Some(p.name.clone()),
+        item_type: "Playlist",
+        media_type: "Audio",
+        is_folder: Some(true),
+        collection_type: Some("playlist"),
+        location_type: Some("FileSystem"),
+        sort_name: Some(p.name.clone()),
+        date_created: Some(p.created_at.clone()),
+        overview: p.comment.clone(),
+        child_count: Some(child_count),
+        song_count: Some(child_count),
+        run_time_ticks: Some(run_time_ticks),
+        user_data: Some(UserItemDataDto {
+            rating: None,
+            played_percentage: None,
+            unplayed_item_count: None,
+            playback_position_ticks: 0,
+            play_count: 0,
+            is_favorite: false,
+            likes: None,
+            last_played_date: None,
+            played: false,
+            key: id.clone(),
+            item_id: id,
+        }),
+        ..Default::default()
+    }
+}
+
 async fn video_to_dto(state: &JellyfinState, v: &Video) -> BaseItemDto {
     let id = mapping::remember_video(&state.pool, v)
         .await
@@ -653,8 +677,16 @@ async fn video_to_dto(state: &JellyfinState, v: &Video) -> BaseItemDto {
         channels: None,
         sample_rate: None,
         bit_rate: Some(v.bitrate as i32),
-        height: if v.height > 0 { Some(v.height as i32) } else { None },
-        width: if v.width > 0 { Some(v.width as i32) } else { None },
+        height: if v.height > 0 {
+            Some(v.height as i32)
+        } else {
+            None
+        },
+        width: if v.width > 0 {
+            Some(v.width as i32)
+        } else {
+            None
+        },
         video_range: "SDR",
         video_range_type: "SDR",
         audio_spatial_format: "None",
@@ -712,8 +744,16 @@ async fn video_to_dto(state: &JellyfinState, v: &Video) -> BaseItemDto {
         path: Some(v.path.clone()),
         parent_id: Some(mapping::movies_library_guid()),
         sort_name: Some(v.title.clone()),
-        height: if v.height > 0 { Some(v.height as i32) } else { None },
-        width: if v.width > 0 { Some(v.width as i32) } else { None },
+        height: if v.height > 0 {
+            Some(v.height as i32)
+        } else {
+            None
+        },
+        width: if v.width > 0 {
+            Some(v.width as i32)
+        } else {
+            None
+        },
         location_type: Some("FileSystem"),
         media_sources: Some(vec![media_source.clone()]),
         media_source_count: Some(1),
@@ -757,10 +797,7 @@ fn wants_videos(q: &ItemsQuery) -> bool {
         || includes(&q.media_types, "Video")
 }
 
-async fn resolve_native(
-    state: &JellyfinState,
-    guid: &str,
-) -> Option<(String, String)> {
+async fn resolve_native(state: &JellyfinState, guid: &str) -> Option<(String, String)> {
     mapping::lookup(&state.pool, guid).await.ok().flatten()
 }
 
@@ -881,6 +918,11 @@ async fn items_impl(state: web::Data<JellyfinState>, q: ItemsQuery) -> HttpRespo
                             out.push(video_to_dto(&state, &v).await);
                         }
                     }
+                    "playlist" => {
+                        if let Ok(Some(p)) = repo::find_playlist(&state.pool, &native).await {
+                            out.push(playlist_to_dto(&state, &p).await);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -959,12 +1001,16 @@ async fn items_impl(state: web::Data<JellyfinState>, q: ItemsQuery) -> HttpRespo
         return list_movies(&state, &q).await;
     }
 
+    // Playlists as items — `?includeItemTypes=Playlist` (with or without
+    // `Recursive=true`). Real Jellyfin surfaces user-owned playlists through
+    // the general Items query as well as via `/Playlists`.
+    if includes(&q.include_item_types, "Playlist") {
+        return list_playlists(&state, &q).await;
+    }
+
     // No parent: filter by AlbumArtistIds / ArtistIds (album or song
     // browsing for an artist — Amcfy's "artist detail" page does this).
-    let artist_filter = q
-        .album_artist_ids
-        .clone()
-        .or_else(|| q.artist_ids.clone());
+    let artist_filter = q.album_artist_ids.clone().or_else(|| q.artist_ids.clone());
 
     // Songs by artist — Amcfy/Symfonium: `?artistIds=<X>&includeItemTypes=Audio`.
     if includes(&q.include_item_types, "Audio") {
@@ -1091,12 +1137,461 @@ async fn list_movies(state: &JellyfinState, q: &ItemsQuery) -> HttpResponse {
     })
 }
 
-/// `/Artists/Prefixes` — same shape as `/Items/Prefixes?IncludeItemTypes=MusicArtist`,
-/// but the URL itself implies the type so we don't need query-string hints.
-pub async fn artists_prefixes(
+// ── Playlists ────────────────────────────────────────────────────────────────
+
+/// Filter `playlists` in-memory by `NameStartsWith` / `NameStartsWithOrGreater`
+/// / `NameLessThan`. Playlists live in a small table so the extra pass is
+/// cheap and keeps the repo API flat.
+fn filter_playlists_by_query(playlists: Vec<Playlist>, q: &ItemsQuery) -> Vec<Playlist> {
+    playlists
+        .into_iter()
+        .filter(|p| {
+            let name = p.name.to_lowercase();
+            if let Some(s) = q.name_starts_with.as_deref() {
+                if !name.starts_with(&s.to_lowercase()) {
+                    return false;
+                }
+            }
+            if let Some(s) = q.name_starts_with_or_greater.as_deref() {
+                if name.as_str() < s.to_lowercase().as_str() {
+                    return false;
+                }
+            }
+            if let Some(s) = q.name_less_than.as_deref() {
+                if name.as_str() >= s.to_lowercase().as_str() {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect()
+}
+
+async fn list_playlists(state: &JellyfinState, q: &ItemsQuery) -> HttpResponse {
+    let playlists = repo::all_playlists(&state.pool).await.unwrap_or_default();
+    let playlists = filter_playlists_by_query(playlists, q);
+    let total = playlists.len() as i32;
+    let start = q.start_index.unwrap_or(0).max(0) as usize;
+    let limit = q.limit.unwrap_or(500).max(1) as usize;
+    let slice: Vec<&Playlist> = playlists.iter().skip(start).take(limit).collect();
+    let mut dtos = Vec::with_capacity(slice.len());
+    for p in slice {
+        dtos.push(playlist_to_dto(state, p).await);
+    }
+    HttpResponse::Ok().json(ItemsResult {
+        items: dtos,
+        total_record_count: total,
+        start_index: start as i32,
+    })
+}
+
+/// Convert a `PlaylistItemId` (our synthesized entry GUID) back to a
+/// 0-based position inside the playlist. Falls back to accepting a raw
+/// integer position or a plain song GUID.
+async fn entry_id_to_position(
+    state: &JellyfinState,
+    playlist_native: &str,
+    entry_id: &str,
+) -> Option<i64> {
+    let normalized = mapping::normalize_guid(entry_id);
+
+    let song_ids = repo::playlist_song_ids(&state.pool, playlist_native)
+        .await
+        .ok()?;
+    for (pos, sid) in song_ids.iter().enumerate() {
+        let expected = mapping::playlist_entry_guid(playlist_native, pos as i64);
+        if mapping::normalize_guid(&expected) == normalized {
+            return Some(pos as i64);
+        }
+        // Some clients pass the song's own GUID as the entry id.
+        let song_guid = mapping::guid(mapping::KIND_SONG, sid);
+        if mapping::normalize_guid(&song_guid) == normalized {
+            return Some(pos as i64);
+        }
+    }
+    entry_id.parse::<i64>().ok()
+}
+
+/// Resolve a comma-separated list of song GUIDs to native song ids. Skips
+/// GUIDs that don't map to a song so callers can silently ignore garbage.
+async fn resolve_song_native_ids(state: &JellyfinState, ids_csv: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw in ids_csv.split(',') {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let g = mapping::normalize_guid(trimmed);
+        if let Some((kind, native)) = resolve_native(state, &g).await {
+            if kind == "song" {
+                out.push(native);
+            }
+        }
+    }
+    out
+}
+
+fn new_playlist_native_id() -> String {
+    format!("pl-{}", auth::random_hex(8))
+}
+
+/// `GET /Playlists` — some clients probe this to enumerate playlists in the
+/// same shape as `/Items`. Real Jellyfin has no such endpoint (playlists are
+/// surfaced through `/Items?IncludeItemTypes=Playlist`), but returning the
+/// list here keeps 3rd-party clients happy.
+pub async fn playlists_list(
     _user: AuthedUser,
     state: web::Data<JellyfinState>,
+    req: HttpRequest,
 ) -> HttpResponse {
+    let q = parse_items_query(&req);
+    list_playlists(&state, &q).await
+}
+
+/// `POST /Playlists` — `CreatePlaylistDto` body OR query params. Response is
+/// `PlaylistCreationResult { Id }`.
+pub async fn create_playlist_endpoint(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    req: HttpRequest,
+    body: Option<web::Json<Value>>,
+) -> HttpResponse {
+    let query = collect_query(&req);
+    let q_one = |k: &str| {
+        query
+            .get(k)
+            .and_then(|v| v.first())
+            .cloned()
+            .filter(|s| !s.is_empty())
+    };
+    let q_ids = || -> Vec<String> {
+        query
+            .get("ids")
+            .or_else(|| query.get("Ids"))
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .flat_map(|s| {
+                s.split(',')
+                    .map(|p| p.trim().to_string())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|s| !s.is_empty())
+            .collect()
+    };
+
+    let body_val = body.map(|b| b.into_inner());
+
+    let name = body_val
+        .as_ref()
+        .and_then(|v| v.get("Name").and_then(|n| n.as_str()).map(String::from))
+        .or_else(|| q_one("name"))
+        .or_else(|| q_one("Name"))
+        .unwrap_or_else(|| "New Playlist".to_string());
+
+    let body_ids: Vec<String> = body_val
+        .as_ref()
+        .and_then(|v| v.get("Ids").and_then(|a| a.as_array()))
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let all_ids: Vec<String> = if body_ids.is_empty() {
+        q_ids()
+    } else {
+        body_ids
+    };
+    let song_ids = resolve_song_native_ids(&state, &all_ids.join(",")).await;
+
+    let native = new_playlist_native_id();
+    let now = now_iso();
+    if let Err(e) = repo::create_playlist(&state.pool, &native, &name, &now).await {
+        tracing::error!("jellyfin: create_playlist: {e}");
+        return HttpResponse::InternalServerError().finish();
+    }
+    if !song_ids.is_empty() {
+        if let Err(e) = repo::append_playlist_songs(&state.pool, &native, &song_ids).await {
+            tracing::error!("jellyfin: append_playlist_songs: {e}");
+        }
+    }
+    let guid = mapping::guid(mapping::KIND_PLAYLIST, &native);
+    // Best-effort — the id is deterministic so a failed remember() just costs
+    // us one lookup on the next request.
+    let _ = mapping::remember(&state.pool, mapping::KIND_PLAYLIST, &native).await;
+    HttpResponse::Ok().json(PlaylistCreationResult { id: guid })
+}
+
+/// `GET /Playlists/{id}` — playlist metadata as a `BaseItemDto`.
+pub async fn get_playlist_endpoint(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let g = mapping::normalize_guid(&path.into_inner());
+    let Some((kind, native)) = resolve_native(&state, &g).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    if kind != "playlist" {
+        return HttpResponse::NotFound().finish();
+    }
+    match repo::find_playlist(&state.pool, &native).await {
+        Ok(Some(p)) => HttpResponse::Ok().json(playlist_to_dto(&state, &p).await),
+        _ => HttpResponse::NotFound().finish(),
+    }
+}
+
+/// `POST /Playlists/{id}` — `UpdatePlaylistDto` body. Supports rename and
+/// full-replace of the item list; other fields (Users, IsPublic) are
+/// accepted and ignored because smolsonic has a single-user model.
+pub async fn update_playlist_endpoint(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    body: Option<web::Json<Value>>,
+) -> HttpResponse {
+    let g = mapping::normalize_guid(&path.into_inner());
+    let Some((kind, native)) = resolve_native(&state, &g).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    if kind != "playlist" {
+        return HttpResponse::NotFound().finish();
+    }
+    let body = match body {
+        Some(b) => b.into_inner(),
+        None => return HttpResponse::NoContent().finish(),
+    };
+    let now = now_iso();
+    if let Some(name) = body.get("Name").and_then(|n| n.as_str()) {
+        if !name.is_empty() {
+            let _ = repo::rename_playlist(&state.pool, &native, name, &now).await;
+        }
+    }
+    if let Some(ids) = body.get("Ids").and_then(|a| a.as_array()) {
+        let csv: String = ids
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        let song_ids = resolve_song_native_ids(&state, &csv).await;
+        let _ = repo::replace_playlist_songs(&state.pool, &native, &song_ids).await;
+    }
+    HttpResponse::NoContent().finish()
+}
+
+/// `GET /Playlists/{id}/Items` — `BaseItemDtoQueryResult` of the playlist's
+/// songs, in order. Each song DTO carries a `PlaylistItemId` so clients can
+/// reference specific entries for remove/move.
+pub async fn playlist_items(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let g = mapping::normalize_guid(&path.into_inner());
+    let Some((kind, native)) = resolve_native(&state, &g).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    if kind != "playlist" {
+        return HttpResponse::NotFound().finish();
+    }
+    let songs = repo::playlist_songs(&state.pool, &native)
+        .await
+        .unwrap_or_default();
+    let total = songs.len() as i32;
+    let q = parse_items_query(&req);
+    let start = q.start_index.unwrap_or(0).max(0) as usize;
+    let limit = q.limit.unwrap_or(500).max(1) as usize;
+
+    let mut dtos: Vec<BaseItemDto> = Vec::new();
+    for (pos, s) in songs.iter().enumerate().skip(start).take(limit) {
+        let mut dto = song_to_dto(&state, s).await;
+        dto.playlist_item_id = Some(mapping::playlist_entry_guid(&native, pos as i64));
+        dtos.push(dto);
+    }
+    HttpResponse::Ok().json(ItemsResult {
+        items: dtos,
+        total_record_count: total,
+        start_index: start as i32,
+    })
+}
+
+/// `POST /Playlists/{id}/Items?ids=...` — append songs at the end.
+pub async fn add_playlist_items(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let g = mapping::normalize_guid(&path.into_inner());
+    let Some((kind, native)) = resolve_native(&state, &g).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    if kind != "playlist" {
+        return HttpResponse::NotFound().finish();
+    }
+    let query = collect_query(&req);
+    let ids_csv = query
+        .get("ids")
+        .or_else(|| query.get("Ids"))
+        .cloned()
+        .unwrap_or_default()
+        .join(",");
+    let song_ids = resolve_song_native_ids(&state, &ids_csv).await;
+    if !song_ids.is_empty() {
+        let _ = repo::append_playlist_songs(&state.pool, &native, &song_ids).await;
+        if let Ok(Some(p)) = repo::find_playlist(&state.pool, &native).await {
+            let _ = repo::rename_playlist(&state.pool, &native, &p.name, &now_iso()).await;
+        }
+    }
+    HttpResponse::NoContent().finish()
+}
+
+/// `DELETE /Playlists/{id}/Items?entryIds=...` — remove one or more
+/// entries, identified by `PlaylistItemId` (or as a fallback, the raw song
+/// GUID or 0-based position).
+pub async fn remove_playlist_items(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let g = mapping::normalize_guid(&path.into_inner());
+    let Some((kind, native)) = resolve_native(&state, &g).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    if kind != "playlist" {
+        return HttpResponse::NotFound().finish();
+    }
+    let query = collect_query(&req);
+    let entry_ids: Vec<String> = query
+        .get("entryIds")
+        .or_else(|| query.get("EntryIds"))
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|s| {
+            s.split(',')
+                .map(|p| p.trim().to_string())
+                .collect::<Vec<_>>()
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if entry_ids.is_empty() {
+        return HttpResponse::NoContent().finish();
+    }
+
+    let current = repo::playlist_song_ids(&state.pool, &native)
+        .await
+        .unwrap_or_default();
+    let mut positions_to_remove: std::collections::BTreeSet<i64> =
+        std::collections::BTreeSet::new();
+    for eid in &entry_ids {
+        if let Some(pos) = entry_id_to_position(&state, &native, eid).await {
+            positions_to_remove.insert(pos);
+        }
+    }
+    let kept: Vec<String> = current
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| !positions_to_remove.contains(&(*i as i64)))
+        .map(|(_, sid)| sid)
+        .collect();
+    if let Err(e) = repo::replace_playlist_songs(&state.pool, &native, &kept).await {
+        tracing::error!("jellyfin: remove_playlist_items: {e}");
+        return HttpResponse::InternalServerError().finish();
+    }
+    let now = now_iso();
+    if let Ok(Some(p)) = repo::find_playlist(&state.pool, &native).await {
+        let _ = repo::rename_playlist(&state.pool, &native, &p.name, &now).await;
+    }
+    HttpResponse::NoContent().finish()
+}
+
+/// `POST /Playlists/{id}/Items/{itemId}/Move/{newIndex}` — move `itemId`
+/// (a `PlaylistItemId`) to `newIndex`, shifting the neighbours.
+pub async fn move_playlist_item(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<(String, String, i64)>,
+) -> HttpResponse {
+    let (playlist_id, item_id, new_index) = path.into_inner();
+    let g = mapping::normalize_guid(&playlist_id);
+    let Some((kind, native)) = resolve_native(&state, &g).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    if kind != "playlist" {
+        return HttpResponse::NotFound().finish();
+    }
+    let Some(from) = entry_id_to_position(&state, &native, &item_id).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    let mut current = repo::playlist_song_ids(&state.pool, &native)
+        .await
+        .unwrap_or_default();
+    if from < 0 || (from as usize) >= current.len() {
+        return HttpResponse::BadRequest().finish();
+    }
+    let target = new_index.max(0).min(current.len() as i64 - 1) as usize;
+    let song = current.remove(from as usize);
+    current.insert(target, song);
+    if let Err(e) = repo::replace_playlist_songs(&state.pool, &native, &current).await {
+        tracing::error!("jellyfin: move_playlist_item: {e}");
+        return HttpResponse::InternalServerError().finish();
+    }
+    let now = now_iso();
+    if let Ok(Some(p)) = repo::find_playlist(&state.pool, &native).await {
+        let _ = repo::rename_playlist(&state.pool, &native, &p.name, &now).await;
+    }
+    HttpResponse::NoContent().finish()
+}
+
+/// `GET /Playlists/{id}/Users` — smolsonic is single-user, so this is always
+/// an empty list. Clients that check permissions before showing the "add
+/// user" UI silently hide it when this is empty, which is the desired
+/// behaviour here.
+pub async fn playlist_users(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let g = mapping::normalize_guid(&path.into_inner());
+    let Some((kind, _native)) = resolve_native(&state, &g).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    if kind != "playlist" {
+        return HttpResponse::NotFound().finish();
+    }
+    HttpResponse::Ok().json(Vec::<Value>::new())
+}
+
+/// `DELETE /Items/{id}` — Jellyfin uses this to delete playlists (playlists
+/// ARE items). We only allow it for playlists; deleting songs/albums via the
+/// API is not supported.
+pub async fn delete_item(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let g = mapping::normalize_guid(&path.into_inner());
+    let Some((kind, native)) = resolve_native(&state, &g).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    if kind != "playlist" {
+        return HttpResponse::Forbidden().finish();
+    }
+    if let Err(e) = repo::delete_playlist(&state.pool, &native).await {
+        tracing::error!("jellyfin: delete_playlist: {e}");
+        return HttpResponse::InternalServerError().finish();
+    }
+    HttpResponse::NoContent().finish()
+}
+
+/// `/Artists/Prefixes` — same shape as `/Items/Prefixes?IncludeItemTypes=MusicArtist`,
+/// but the URL itself implies the type so we don't need query-string hints.
+pub async fn artists_prefixes(_user: AuthedUser, state: web::Data<JellyfinState>) -> HttpResponse {
     let letters = repo::artist_name_prefixes(&state.pool)
         .await
         .unwrap_or_default();
@@ -1152,10 +1647,7 @@ pub async fn items_prefixes(
     HttpResponse::Ok().json(items)
 }
 
-async fn list_artists_or_albums(
-    state: &JellyfinState,
-    q: &ItemsQuery,
-) -> HttpResponse {
+async fn list_artists_or_albums(state: &JellyfinState, q: &ItemsQuery) -> HttpResponse {
     let limit = q.limit.unwrap_or(100).max(1);
     let offset = q.start_index.unwrap_or(0).max(0);
     let starts = q.name_starts_with.as_deref();
@@ -1258,6 +1750,10 @@ pub async fn item_by_id(
             Ok(Some(v)) => HttpResponse::Ok().json(video_to_dto(&state, &v).await),
             _ => HttpResponse::NotFound().finish(),
         },
+        "playlist" => match repo::find_playlist(&state.pool, &native).await {
+            Ok(Some(p)) => HttpResponse::Ok().json(playlist_to_dto(&state, &p).await),
+            _ => HttpResponse::NotFound().finish(),
+        },
         _ => HttpResponse::NotFound().finish(),
     }
 }
@@ -1290,6 +1786,10 @@ pub async fn user_item_by_id(
         },
         "video" => match repo::find_video(&state.pool, &native).await {
             Ok(Some(v)) => HttpResponse::Ok().json(video_to_dto(&state, &v).await),
+            _ => HttpResponse::NotFound().finish(),
+        },
+        "playlist" => match repo::find_playlist(&state.pool, &native).await {
+            Ok(Some(p)) => HttpResponse::Ok().json(playlist_to_dto(&state, &p).await),
             _ => HttpResponse::NotFound().finish(),
         },
         _ => HttpResponse::NotFound().finish(),
@@ -1333,10 +1833,7 @@ pub async fn artist_by_name(
 ) -> HttpResponse {
     let name = path.into_inner();
     let artists = repo::all_artists(&state.pool).await.unwrap_or_default();
-    if let Some(a) = artists
-        .iter()
-        .find(|a| a.name.eq_ignore_ascii_case(&name))
-    {
+    if let Some(a) = artists.iter().find(|a| a.name.eq_ignore_ascii_case(&name)) {
         HttpResponse::Ok().json(artist_to_dto(&state, a).await)
     } else {
         HttpResponse::NotFound().finish()
@@ -1468,11 +1965,7 @@ pub async fn playback_info(
 
 // ── Audio stream ─────────────────────────────────────────────────────────────
 
-async fn stream_by_guid(
-    state: &JellyfinState,
-    guid: &str,
-    req: &HttpRequest,
-) -> HttpResponse {
+async fn stream_by_guid(state: &JellyfinState, guid: &str, req: &HttpRequest) -> HttpResponse {
     // Streaming endpoints accept api_key as a query param, so we authorize
     // here instead of through the FromRequest extractor.
     let token = auth::extract_token(req);
@@ -1603,11 +2096,7 @@ fn serve_file(path_str: &str, content_type: &str, req: &HttpRequest) -> HttpResp
 
 // ── Video stream ─────────────────────────────────────────────────────────────
 
-async fn video_by_guid(
-    state: &JellyfinState,
-    guid: &str,
-    req: &HttpRequest,
-) -> HttpResponse {
+async fn video_by_guid(state: &JellyfinState, guid: &str, req: &HttpRequest) -> HttpResponse {
     let token = auth::extract_token(req);
     let authorized = match token {
         Some(t) => auth::token_valid(&state.pool, &t).await,
@@ -1698,17 +2187,11 @@ pub async fn sessions_playing(_user: AuthedUser, _body: web::Json<Value>) -> Htt
     HttpResponse::NoContent().finish()
 }
 
-pub async fn sessions_playing_progress(
-    _user: AuthedUser,
-    _body: web::Json<Value>,
-) -> HttpResponse {
+pub async fn sessions_playing_progress(_user: AuthedUser, _body: web::Json<Value>) -> HttpResponse {
     HttpResponse::NoContent().finish()
 }
 
-pub async fn sessions_playing_stopped(
-    _user: AuthedUser,
-    _body: web::Json<Value>,
-) -> HttpResponse {
+pub async fn sessions_playing_stopped(_user: AuthedUser, _body: web::Json<Value>) -> HttpResponse {
     HttpResponse::NoContent().finish()
 }
 
@@ -1766,10 +2249,7 @@ pub async fn trigger_library_scan(
         let covers_dir = state.covers_dir.clone();
         let progress = state.music_scan_progress.clone();
         tokio::spawn(async move {
-            tracing::info!(
-                "jellyfin: triggered music scan of {}",
-                music_dir.display()
-            );
+            tracing::info!("jellyfin: triggered music scan of {}", music_dir.display());
             if let Err(e) = crate::scanner::scan(pool, music_dir, covers_dir, progress).await {
                 tracing::error!("jellyfin-triggered music scan failed: {e}");
             }
@@ -1785,10 +2265,7 @@ pub async fn trigger_library_scan(
             let covers_dir = state.covers_dir.clone();
             let progress = state.video_scan_progress.clone();
             tokio::spawn(async move {
-                tracing::info!(
-                    "jellyfin: triggered video scan of {}",
-                    video_dir.display()
-                );
+                tracing::info!("jellyfin: triggered video scan of {}", video_dir.display());
                 if let Err(e) =
                     crate::video_scanner::scan(pool, video_dir, covers_dir, progress).await
                 {
@@ -1859,10 +2336,7 @@ pub async fn empty_items() -> HttpResponse {
 
 /// `/UserViews?userId=...&includeHidden=...` — Findroid uses this instead of
 /// the path-parametric `/Users/{id}/Views`. Same payload.
-pub async fn user_views_query(
-    _user: AuthedUser,
-    state: web::Data<JellyfinState>,
-) -> HttpResponse {
+pub async fn user_views_query(_user: AuthedUser, state: web::Data<JellyfinState>) -> HttpResponse {
     let views = all_library_views(&state);
     let total = views.len() as i32;
     HttpResponse::Ok().json(ViewsResult {
@@ -1911,12 +2385,18 @@ pub async fn search_hints(
     let want_artist = q
         .include_item_types
         .as_deref()
-        .map(|s| s.split(',').any(|t| t.trim().eq_ignore_ascii_case("MusicArtist")))
+        .map(|s| {
+            s.split(',')
+                .any(|t| t.trim().eq_ignore_ascii_case("MusicArtist"))
+        })
         .unwrap_or(true);
     let want_album = q
         .include_item_types
         .as_deref()
-        .map(|s| s.split(',').any(|t| t.trim().eq_ignore_ascii_case("MusicAlbum")))
+        .map(|s| {
+            s.split(',')
+                .any(|t| t.trim().eq_ignore_ascii_case("MusicAlbum"))
+        })
         .unwrap_or(true);
     let want_song = q
         .include_item_types

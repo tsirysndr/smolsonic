@@ -122,7 +122,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .route(
             "/Branding/Css",
             web::get().to(|| async {
-                actix_web::HttpResponse::Ok().content_type("text/css").body("")
+                actix_web::HttpResponse::Ok()
+                    .content_type("text/css")
+                    .body("")
             }),
         )
         // Users / auth — register both PascalCase (spec) and lowercase
@@ -195,6 +197,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             web::get().to(handlers::item_file_stream),
         )
         .route("/Items/{id}", web::get().to(handlers::item_by_id))
+        // DELETE /Items/{id} — Jellyfin uses this to delete playlists (they
+        // are `BaseItem`s). Songs/albums are read-only in smolsonic and get
+        // 403 here.
+        .route("/Items/{id}", web::delete().to(handlers::delete_item))
         .route("/Users/{id}/Items", web::get().to(handlers::user_items))
         .route(
             "/Users/{id}/Items/Resume",
@@ -218,10 +224,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         // /ScheduledTasks/* — Amcfy and the official client probe these to
         // trigger library scans / probes. smolsonic has its own scanner; we
         // ack the trigger but don't expose any task state.
-        .route(
-            "/ScheduledTasks",
-            web::get().to(handlers::empty_array),
-        )
+        .route("/ScheduledTasks", web::get().to(handlers::empty_array))
         .route(
             "/ScheduledTasks/Running/{id}",
             web::post().to(handlers::trigger_library_scan),
@@ -242,17 +245,17 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         // so empty results are the right answer.
         .route("/Shows/NextUp", web::get().to(handlers::empty_items))
         .route("/Shows/Upcoming", web::get().to(handlers::empty_items))
-        .route(
-            "/Shows/{id}/Episodes",
-            web::get().to(handlers::empty_items),
-        )
+        .route("/Shows/{id}/Episodes", web::get().to(handlers::empty_items))
         .route("/Shows/{id}/Seasons", web::get().to(handlers::empty_items))
         // Artists
         .route("/Artists", web::get().to(handlers::artists))
         .route("/Artists/AlbumArtists", web::get().to(handlers::artists))
         // Some clients ask for the artist alpha-jump rail via `/Artists/Prefixes`
         // instead of `/Items/Prefixes?IncludeItemTypes=MusicArtist`. Same data.
-        .route("/Artists/Prefixes", web::get().to(handlers::artists_prefixes))
+        .route(
+            "/Artists/Prefixes",
+            web::get().to(handlers::artists_prefixes),
+        )
         .route("/Artists/{name}", web::get().to(handlers::artist_by_name))
         // Images — Findroid uses lowercase `/items/...` so we register both.
         .route(
@@ -308,7 +311,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         )
         // Video stream
         .route("/Videos/{id}/stream", web::get().to(handlers::video_stream))
-        .route("/Videos/{id}/stream", web::head().to(handlers::video_stream))
+        .route(
+            "/Videos/{id}/stream",
+            web::head().to(handlers::video_stream),
+        )
         .route(
             "/Videos/{id}/stream.{ext}",
             web::get().to(handlers::video_stream_ext),
@@ -348,7 +354,42 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             "/DisplayPreferences/{id}",
             web::get().to(handlers::displaypreferences),
         )
-        .route("/Playlists", web::get().to(handlers::empty_items))
+        // Playlists — modelled after the Jellyfin OpenAPI Playlists tag.
+        // Order matters: specific `/Playlists/{id}/…` paths must precede the
+        // catch-all `/Playlists/{id}` GET.
+        .route("/Playlists", web::get().to(handlers::playlists_list))
+        .route(
+            "/Playlists",
+            web::post().to(handlers::create_playlist_endpoint),
+        )
+        .route(
+            "/Playlists/{id}/Items",
+            web::get().to(handlers::playlist_items),
+        )
+        .route(
+            "/Playlists/{id}/Items",
+            web::post().to(handlers::add_playlist_items),
+        )
+        .route(
+            "/Playlists/{id}/Items",
+            web::delete().to(handlers::remove_playlist_items),
+        )
+        .route(
+            "/Playlists/{id}/Items/{item_id}/Move/{new_index}",
+            web::post().to(handlers::move_playlist_item),
+        )
+        .route(
+            "/Playlists/{id}/Users",
+            web::get().to(handlers::playlist_users),
+        )
+        .route(
+            "/Playlists/{id}",
+            web::get().to(handlers::get_playlist_endpoint),
+        )
+        .route(
+            "/Playlists/{id}",
+            web::post().to(handlers::update_playlist_endpoint),
+        )
         .route(
             "/Users/{id}/Items/Suggestions",
             web::get().to(handlers::empty_items),
@@ -402,7 +443,9 @@ mod tests {
             "INSERT INTO albums (id, title, artist, artist_id, year, cover_art)
              VALUES ('al-1','Test Album','Test Artist','ar-1',2020,NULL)",
         )
-        .execute(&pool).await.unwrap();
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO songs (id, path, title, artist, artist_id, album, album_id, genre,
                 track_number, disc_number, year, duration_ms, bitrate, filesize, suffix, content_type, cover_art, mtime)
@@ -457,10 +500,7 @@ mod tests {
     }
 
     fn tempdir() -> std::path::PathBuf {
-        let base = std::env::temp_dir().join(format!(
-            "smolsonic-jf-test-{}",
-            std::process::id()
-        ));
+        let base = std::env::temp_dir().join(format!("smolsonic-jf-test-{}", std::process::id()));
         // Ensure a fresh dir per test by appending a random suffix.
         let unique = base.join(auth::random_hex(8));
         std::fs::create_dir_all(&unique).unwrap();
@@ -479,7 +519,9 @@ mod tests {
         )
         .await;
 
-        let req = test::TestRequest::get().uri("/System/Info/Public").to_request();
+        let req = test::TestRequest::get()
+            .uri("/System/Info/Public")
+            .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: Value = test::read_body_json(resp).await;
@@ -507,7 +549,10 @@ mod tests {
             ))
             .set_json(serde_json::json!({"Username":"alice","Pw":"nope"}))
             .to_request();
-        assert_eq!(test::call_service(&app, bad).await.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            test::call_service(&app, bad).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
 
         // Correct credentials → token.
         let req = test::TestRequest::post()
@@ -560,7 +605,10 @@ mod tests {
                 .insert_header(("X-Emby-Token", token.clone()))
                 .to_request();
             let resp: Value = test::call_and_read_body_json(&app, req).await;
-            assert_eq!(resp["TotalRecordCount"], expected_t, "wrong count for {uri}");
+            assert_eq!(
+                resp["TotalRecordCount"], expected_t,
+                "wrong count for {uri}"
+            );
         }
 
         // /Artists/Prefixes returns ["T"] for the fixture.
@@ -626,9 +674,19 @@ mod tests {
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
-        let cl = resp.headers().get("content-length").unwrap().to_str().unwrap();
+        let cl = resp
+            .headers()
+            .get("content-length")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert_eq!(cl, "100");
-        let cr = resp.headers().get("content-range").unwrap().to_str().unwrap();
+        let cr = resp
+            .headers()
+            .get("content-range")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(cr.starts_with("bytes 0-99/"));
 
         // Streaming without a token → 401.
@@ -766,7 +824,11 @@ mod tests {
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
-            resp.headers().get("content-type").unwrap().to_str().unwrap(),
+            resp.headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "video/mp4"
         );
 
@@ -778,7 +840,11 @@ mod tests {
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
         assert_eq!(
-            resp.headers().get("content-length").unwrap().to_str().unwrap(),
+            resp.headers()
+                .get("content-length")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "256"
         );
 
@@ -789,5 +855,242 @@ mod tests {
             .to_request();
         let pb: Value = test::call_and_read_body_json(&app, req).await;
         assert_eq!(pb["MediaSources"][0]["Container"], "mp4");
+    }
+
+    /// End-to-end for the Playlists API modelled after the Jellyfin OpenAPI
+    /// spec: create → list → get → add items → move → remove → delete.
+    #[actix_web::test]
+    async fn playlist_crud_roundtrip() {
+        let dir = tempdir();
+        let state = fixture_state(&dir, &dir, false).await;
+        // Insert a second song so we can test add / move / remove.
+        let song2_path = dir.join("song2.mp3");
+        let mut f = std::fs::File::create(&song2_path).unwrap();
+        Write::write_all(&mut f, &[0u8; 4096]).unwrap();
+        sqlx::query(
+            "INSERT INTO songs (id, path, title, artist, artist_id, album, album_id, genre,
+                track_number, disc_number, year, duration_ms, bitrate, filesize, suffix, content_type, cover_art, mtime)
+             VALUES ('so-2', ?1, 'Second Song', 'Test Artist', 'ar-1', 'Test Album', 'al-1', NULL,
+                2, 1, 2020, 45000, 192, 4096, 'mp3', 'audio/mpeg', NULL, 0)",
+        )
+        .bind(song2_path.to_string_lossy().to_string())
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(configure_routes),
+        )
+        .await;
+
+        // Authenticate.
+        let req = test::TestRequest::post()
+            .uri("/Users/AuthenticateByName")
+            .insert_header((
+                "X-Emby-Authorization",
+                r#"MediaBrowser Client="t", Device="d", DeviceId="i", Version="v""#,
+            ))
+            .set_json(serde_json::json!({"Username":"alice","Pw":"secret"}))
+            .to_request();
+        let auth_body: Value = test::call_and_read_body_json(&app, req).await;
+        let token = auth_body["AccessToken"].as_str().unwrap().to_string();
+
+        // Discover song GUIDs (populates jf_guids as a side effect). The list
+        // comes back ordered by title (COLLATE NOCASE) — pick each song by
+        // name so the test stays stable regardless of ordering.
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=Audio")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let songs: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(songs["TotalRecordCount"], 2);
+        let by_name: std::collections::HashMap<String, String> = songs["Items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| {
+                (
+                    s["Name"].as_str().unwrap().to_string(),
+                    s["Id"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        let s1 = by_name["Test Song"].clone();
+        let s2 = by_name["Second Song"].clone();
+
+        // Create a playlist with one initial song via JSON body.
+        let req = test::TestRequest::post()
+            .uri("/Playlists")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .set_json(serde_json::json!({
+                "Name": "My Mix",
+                "Ids": [s1.clone()],
+                "MediaType": "Audio",
+                "IsPublic": true,
+            }))
+            .to_request();
+        let created: Value = test::call_and_read_body_json(&app, req).await;
+        let playlist_id = created["Id"].as_str().unwrap().to_string();
+        assert!(!playlist_id.is_empty());
+
+        // GET single playlist DTO.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Playlists/{playlist_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let pl: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(pl["Name"], "My Mix");
+        assert_eq!(pl["Type"], "Playlist");
+        assert_eq!(pl["ChildCount"], 1);
+
+        // Playlists surface through /Items?IncludeItemTypes=Playlist.
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=Playlist")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let list: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(list["TotalRecordCount"], 1);
+        assert_eq!(list["Items"][0]["Id"], playlist_id);
+
+        // GET /Playlists is our stub over the same list.
+        let req = test::TestRequest::get()
+            .uri("/Playlists")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let list: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(list["TotalRecordCount"], 1);
+
+        // Append the second song.
+        let req = test::TestRequest::post()
+            .uri(&format!("/Playlists/{playlist_id}/Items?ids={s2}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NO_CONTENT
+        );
+
+        // Verify order: song1, song2 — capture PlaylistItemIds.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Playlists/{playlist_id}/Items"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let items: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(items["TotalRecordCount"], 2);
+        assert_eq!(items["Items"][0]["Name"], "Test Song");
+        assert_eq!(items["Items"][1]["Name"], "Second Song");
+        let entry_at_0 = items["Items"][0]["PlaylistItemId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let entry_at_1 = items["Items"][1]["PlaylistItemId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_ne!(entry_at_0, entry_at_1);
+
+        // Move entry at position 0 → position 1. Order becomes song2, song1.
+        let req = test::TestRequest::post()
+            .uri(&format!(
+                "/Playlists/{playlist_id}/Items/{entry_at_0}/Move/1"
+            ))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NO_CONTENT
+        );
+        let req = test::TestRequest::get()
+            .uri(&format!("/Playlists/{playlist_id}/Items"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let items: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(items["Items"][0]["Name"], "Second Song");
+        assert_eq!(items["Items"][1]["Name"], "Test Song");
+
+        // Update: rename via POST /Playlists/{id}.
+        let req = test::TestRequest::post()
+            .uri(&format!("/Playlists/{playlist_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .set_json(serde_json::json!({"Name": "Renamed Mix"}))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NO_CONTENT
+        );
+        let req = test::TestRequest::get()
+            .uri(&format!("/Playlists/{playlist_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let pl: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(pl["Name"], "Renamed Mix");
+
+        // Remove entry at (new) position 0 → only song1 remains.
+        let items: Value = {
+            let req = test::TestRequest::get()
+                .uri(&format!("/Playlists/{playlist_id}/Items"))
+                .insert_header(("X-Emby-Token", token.clone()))
+                .to_request();
+            test::call_and_read_body_json(&app, req).await
+        };
+        let head_entry = items["Items"][0]["PlaylistItemId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let req = test::TestRequest::delete()
+            .uri(&format!(
+                "/Playlists/{playlist_id}/Items?entryIds={head_entry}"
+            ))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NO_CONTENT
+        );
+        let req = test::TestRequest::get()
+            .uri(&format!("/Playlists/{playlist_id}/Items"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let items: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(items["TotalRecordCount"], 1);
+        assert_eq!(items["Items"][0]["Name"], "Test Song");
+
+        // /Playlists/{id}/Users is an empty list (single-user server).
+        let req = test::TestRequest::get()
+            .uri(&format!("/Playlists/{playlist_id}/Users"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let users: Value = test::call_and_read_body_json(&app, req).await;
+        assert!(users.as_array().unwrap().is_empty());
+
+        // Delete via DELETE /Items/{id}. Non-playlist items reject.
+        let req = test::TestRequest::delete()
+            .uri(&format!("/Items/{s1}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::FORBIDDEN
+        );
+        let req = test::TestRequest::delete()
+            .uri(&format!("/Items/{playlist_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NO_CONTENT
+        );
+
+        // Gone.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Playlists/{playlist_id}"))
+            .insert_header(("X-Emby-Token", token))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NOT_FOUND
+        );
     }
 }

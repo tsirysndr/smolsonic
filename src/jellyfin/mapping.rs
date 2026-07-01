@@ -1,5 +1,5 @@
 use crate::db::Db;
-use crate::models::{Album, Artist, Song, Video};
+use crate::models::{Album, Artist, Playlist, Song, Video};
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 
@@ -7,6 +7,7 @@ pub const KIND_ARTIST: &str = "artist";
 pub const KIND_ALBUM: &str = "album";
 pub const KIND_SONG: &str = "song";
 pub const KIND_VIDEO: &str = "video";
+pub const KIND_PLAYLIST: &str = "playlist";
 pub const KIND_LIBRARY: &str = "library";
 pub const KIND_USER: &str = "user";
 
@@ -102,6 +103,21 @@ pub async fn remember_video(pool: &Db, v: &Video) -> Result<String> {
     remember(pool, KIND_VIDEO, &v.id).await
 }
 
+pub async fn remember_playlist(pool: &Db, p: &Playlist) -> Result<String> {
+    remember(pool, KIND_PLAYLIST, &p.id).await
+}
+
+/// Deterministic per-entry GUID for `PlaylistItemId`. Emby / Jellyfin clients
+/// pass this back in `EntryIds` when removing or moving items. Reversible on
+/// the server side by iterating the playlist once and matching the GUID —
+/// see `handlers::position_from_entry_id`.
+pub fn playlist_entry_guid(playlist_native_id: &str, position: i64) -> String {
+    guid(
+        "playlist_entry",
+        &format!("{playlist_native_id}:{position}"),
+    )
+}
+
 /// Deterministic GUID for the music + movies virtual libraries.
 pub fn library_guid() -> String {
     guid(KIND_LIBRARY, "music")
@@ -142,10 +158,7 @@ mod tests {
     #[test]
     fn guid_dashed_formats_correctly() {
         let g = "0123456789abcdef0123456789abcdef";
-        assert_eq!(
-            guid_dashed(g),
-            "01234567-89ab-cdef-0123-456789abcdef"
-        );
+        assert_eq!(guid_dashed(g), "01234567-89ab-cdef-0123-456789abcdef");
     }
 
     #[test]
@@ -160,10 +173,7 @@ mod tests {
             normalize_guid("01234567-89AB-CDEF-0123-456789ABCDEF"),
             dashed
         );
-        assert_eq!(
-            normalize_guid("0123456789abcdef0123456789abcdef"),
-            dashed
-        );
+        assert_eq!(normalize_guid("0123456789abcdef0123456789abcdef"), dashed);
     }
 
     #[tokio::test]

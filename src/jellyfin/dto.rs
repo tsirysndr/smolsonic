@@ -221,11 +221,9 @@ impl UserPolicy {
             blocked_channels: Some(vec![]),
             remote_client_bitrate_limit: 0,
             authentication_provider_id:
-                "Jellyfin.Server.Implementations.Users.DefaultAuthenticationProvider"
-                    .to_string(),
+                "Jellyfin.Server.Implementations.Users.DefaultAuthenticationProvider".to_string(),
             password_reset_provider_id:
-                "Jellyfin.Server.Implementations.Users.DefaultPasswordResetProvider"
-                    .to_string(),
+                "Jellyfin.Server.Implementations.Users.DefaultPasswordResetProvider".to_string(),
             sync_play_access: "CreateAndJoinGroups",
         }
     }
@@ -468,6 +466,11 @@ pub struct BaseItemDto {
     pub artist_count: Option<i32>,
     pub height: Option<i32>,
     pub width: Option<i32>,
+    /// Stable per-entry id inside a playlist. Only meaningful for songs
+    /// returned via `GET /Playlists/{id}/Items` — clients pass these back
+    /// in `EntryIds=` for remove/move calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub playlist_item_id: Option<String>,
 }
 
 // ── Wrappers used in handlers ───────────────────────────────────────────────
@@ -493,4 +496,13 @@ pub struct ViewsResult {
 pub struct PlaybackInfoResponse {
     pub media_sources: Vec<MediaSource>,
     pub play_session_id: Option<String>,
+}
+
+/// `PlaylistCreationResult` — sole required field is `Id` (the new playlist's
+/// GUID). Clients (Findroid, Streamyfin) use this to jump straight into the
+/// playlist detail after creation.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct PlaylistCreationResult {
+    pub id: String,
 }
