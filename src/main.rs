@@ -12,8 +12,8 @@ mod watcher;
 
 use anyhow::Result;
 use clap::Parser;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 
 #[actix_web::main]
@@ -33,10 +33,7 @@ async fn main() -> Result<()> {
         .as_ref()
         .filter(|s| s.enabled)
         .map(|s| (s.host.as_str(), s.port));
-    let jellyfin_endpoint = cfg
-        .jellyfin
-        .as_ref()
-        .map(|j| (j.host.as_str(), j.port));
+    let jellyfin_endpoint = cfg.jellyfin.as_ref().map(|j| (j.host.as_str(), j.port));
     cli::print_banner(
         &cfg.host,
         cfg.port,
@@ -126,8 +123,7 @@ async fn main() -> Result<()> {
         if !args.no_scan {
             tokio::spawn(async move {
                 tracing::info!("starting video scan of {}", video_dir.display());
-                if let Err(e) =
-                    video_scanner::scan(pool_c, video_dir, covers_dir, progress_c).await
+                if let Err(e) = video_scanner::scan(pool_c, video_dir, covers_dir, progress_c).await
                 {
                     tracing::error!("video scan failed: {e}");
                 }
@@ -175,8 +171,7 @@ async fn main() -> Result<()> {
                 let music_dir = cfg.music_dir.clone();
                 let covers_dir = cfg.covers_dir.clone();
                 let jf_cfg_c = jf_cfg.clone();
-                let video_library_name =
-                    cfg.video.as_ref().map(|v| v.library_name.clone());
+                let video_library_name = cfg.video.as_ref().map(|v| v.library_name.clone());
                 let video_dir = cfg.video.as_ref().map(|v| v.video_dir.clone());
                 let music_progress = scan_progress.clone();
                 let video_progress = video_scan_progress.clone();

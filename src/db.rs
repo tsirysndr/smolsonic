@@ -242,11 +242,9 @@ async fn backfill_fts(pool: &Db) -> Result<()> {
         .fetch_one(pool)
         .await?;
     if artists_empty == 0 {
-        sqlx::query(
-            "INSERT INTO artists_fts (id, name) SELECT id, name FROM artists",
-        )
-        .execute(pool)
-        .await?;
+        sqlx::query("INSERT INTO artists_fts (id, name) SELECT id, name FROM artists")
+            .execute(pool)
+            .await?;
     }
     Ok(())
 }

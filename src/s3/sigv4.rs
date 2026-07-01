@@ -33,10 +33,7 @@ pub fn verify(
     }
 
     let canonical = build_canonical_request(req, &parts.signed_headers, body_sha256_hex)?;
-    let scope = format!(
-        "{}/{}/{}/aws4_request",
-        parts.scope_date, region, service
-    );
+    let scope = format!("{}/{}/{}/aws4_request", parts.scope_date, region, service);
     let string_to_sign = format!(
         "AWS4-HMAC-SHA256\n{}\n{}\n{}",
         parts.amz_date,
@@ -64,7 +61,11 @@ struct AuthParts {
 
 fn parse_authorization(req: &HttpRequest) -> Result<AuthParts, AuthError> {
     // Try header first.
-    if let Some(hdr) = req.headers().get("authorization").and_then(|v| v.to_str().ok()) {
+    if let Some(hdr) = req
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+    {
         return parse_authorization_header(hdr, req);
     }
     // Then presigned query string.
@@ -123,7 +124,10 @@ fn parse_authorization_header(hdr: &str, req: &HttpRequest) -> Result<AuthParts,
     })
 }
 
-fn parse_presigned(q: BTreeMap<String, String>, _req: &HttpRequest) -> Result<AuthParts, AuthError> {
+fn parse_presigned(
+    q: BTreeMap<String, String>,
+    _req: &HttpRequest,
+) -> Result<AuthParts, AuthError> {
     let credential = q
         .get("X-Amz-Credential")
         .ok_or_else(|| AuthError("missing X-Amz-Credential".into()))?;
@@ -227,11 +231,8 @@ pub fn uri_encode(s: &str, encode_slash: bool) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.as_bytes() {
         let c = *b;
-        let unreserved = c.is_ascii_alphanumeric()
-            || c == b'-'
-            || c == b'.'
-            || c == b'_'
-            || c == b'~';
+        let unreserved =
+            c.is_ascii_alphanumeric() || c == b'-' || c == b'.' || c == b'_' || c == b'~';
         if unreserved {
             out.push(c as char);
         } else if c == b'/' && !encode_slash {
@@ -403,7 +404,10 @@ pub fn sign_authorization(
     scope_date: &str,
 ) -> String {
     let mut header_lines = Vec::new();
-    let lowered: Vec<String> = signed_headers.iter().map(|s| s.to_ascii_lowercase()).collect();
+    let lowered: Vec<String> = signed_headers
+        .iter()
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
     for name in &lowered {
         let value = headers
             .iter()

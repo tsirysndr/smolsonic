@@ -163,7 +163,9 @@ mod tests {
     async fn list_buckets_requires_valid_signature() {
         let dir = tempdir("list_buckets");
         let app = test::init_service(
-            App::new().app_data(build_state(dir.clone())).configure(configure_routes),
+            App::new()
+                .app_data(build_state(dir.clone()))
+                .configure(configure_routes),
         )
         .await;
 
@@ -204,7 +206,9 @@ mod tests {
     async fn head_bucket_unknown_returns_404_without_auth_check() {
         let dir = tempdir("head_bucket");
         let app = test::init_service(
-            App::new().app_data(build_state(dir.clone())).configure(configure_routes),
+            App::new()
+                .app_data(build_state(dir.clone()))
+                .configure(configure_routes),
         )
         .await;
 
@@ -280,11 +284,19 @@ mod tests {
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
-            resp.headers().get("content-length").unwrap().to_str().unwrap(),
+            resp.headers()
+                .get("content-length")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             &payload.len().to_string()
         );
         assert_eq!(
-            resp.headers().get("content-type").unwrap().to_str().unwrap(),
+            resp.headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "audio/mpeg"
         );
 
@@ -395,9 +407,7 @@ mod tests {
         let signature = auth.rsplit_once("Signature=").unwrap().1.to_string();
 
         let payload = b"presigned upload".to_vec();
-        let uri = format!(
-            "/music/presigned.bin?{canonical_query}&X-Amz-Signature={signature}"
-        );
+        let uri = format!("/music/presigned.bin?{canonical_query}&X-Amz-Signature={signature}");
         let req = test::TestRequest::put()
             .uri(&uri)
             .insert_header(("host", HOST))
@@ -450,9 +460,7 @@ mod tests {
         let signature = auth.rsplit_once("Signature=").unwrap().1.to_string();
 
         let payload = b"browser upload".to_vec();
-        let uri = format!(
-            "/music/browser.bin?{canonical_query}&X-Amz-Signature={signature}"
-        );
+        let uri = format!("/music/browser.bin?{canonical_query}&X-Amz-Signature={signature}");
         let req = test::TestRequest::put()
             .uri(&uri)
             .insert_header(("host", HOST))
@@ -608,7 +616,10 @@ mod tests {
             "Artist/Live/track1.mp3",
             "other.mp3",
         ] {
-            assert!(xml.contains(&format!("<Key>{key}</Key>")), "missing {key} in {xml}");
+            assert!(
+                xml.contains(&format!("<Key>{key}</Key>")),
+                "missing {key} in {xml}"
+            );
         }
     }
 
@@ -728,7 +739,9 @@ mod tests {
     async fn list_objects_on_unknown_bucket_returns_no_such_bucket() {
         let dir = tempdir("nobucket");
         let app = test::init_service(
-            App::new().app_data(build_state(dir.clone())).configure(configure_routes),
+            App::new()
+                .app_data(build_state(dir.clone()))
+                .configure(configure_routes),
         )
         .await;
 

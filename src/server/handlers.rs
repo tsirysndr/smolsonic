@@ -488,11 +488,17 @@ pub async fn get_artist(
             return response::error_json(0, "database error");
         }
     };
-    let albums = repo::albums_by_artist(&state.pool, id).await.unwrap_or_default();
+    let albums = repo::albums_by_artist(&state.pool, id)
+        .await
+        .unwrap_or_default();
     let mut album_jsons = Vec::with_capacity(albums.len());
     for a in &albums {
-        let count = repo::song_count_for_album(&state.pool, &a.id).await.unwrap_or(0);
-        let dur = repo::songs_for_album_duration(&state.pool, &a.id).await.unwrap_or(0);
+        let count = repo::song_count_for_album(&state.pool, &a.id)
+            .await
+            .unwrap_or(0);
+        let dur = repo::songs_for_album_duration(&state.pool, &a.id)
+            .await
+            .unwrap_or(0);
         album_jsons.push(album_to_child(a, count, dur));
     }
     response::ok_json(json!({
@@ -525,7 +531,9 @@ pub async fn get_album(
             return response::error_json(0, "database error");
         }
     };
-    let songs = repo::songs_by_album(&state.pool, id).await.unwrap_or_default();
+    let songs = repo::songs_by_album(&state.pool, id)
+        .await
+        .unwrap_or_default();
     let total_dur = songs.iter().map(|s| s.duration_ms / 1000).sum::<i64>();
     let song_jsons: Vec<Value> = songs.iter().map(song_to_child).collect();
     let mut a = serde_json::Map::new();
@@ -544,10 +552,7 @@ pub async fn get_album(
     response::ok_json(json!({ "album": Value::Object(a) }))
 }
 
-pub async fn get_song(
-    state: web::Data<SubsonicState>,
-    query: web::Query<IdParam>,
-) -> HttpResponse {
+pub async fn get_song(state: web::Data<SubsonicState>, query: web::Query<IdParam>) -> HttpResponse {
     let q = query.into_inner();
     if let Some(r) = require_auth(&state, &CommonLike::from_id(&q)) {
         return r;
@@ -582,8 +587,12 @@ pub async fn get_album_list2(
         .unwrap_or_default();
     let mut album_jsons = Vec::with_capacity(albums.len());
     for a in &albums {
-        let count = repo::song_count_for_album(&state.pool, &a.id).await.unwrap_or(0);
-        let dur = repo::songs_for_album_duration(&state.pool, &a.id).await.unwrap_or(0);
+        let count = repo::song_count_for_album(&state.pool, &a.id)
+            .await
+            .unwrap_or(0);
+        let dur = repo::songs_for_album_duration(&state.pool, &a.id)
+            .await
+            .unwrap_or(0);
         album_jsons.push(album_to_child(a, count, dur));
     }
     response::ok_json(json!({
@@ -620,8 +629,12 @@ pub async fn search3(
     let artist_jsons: Vec<Value> = artists.iter().map(|a| artist_to_json(a, 0)).collect();
     let mut album_jsons = Vec::with_capacity(albums.len());
     for a in &albums {
-        let count = repo::song_count_for_album(&state.pool, &a.id).await.unwrap_or(0);
-        let dur = repo::songs_for_album_duration(&state.pool, &a.id).await.unwrap_or(0);
+        let count = repo::song_count_for_album(&state.pool, &a.id)
+            .await
+            .unwrap_or(0);
+        let dur = repo::songs_for_album_duration(&state.pool, &a.id)
+            .await
+            .unwrap_or(0);
         album_jsons.push(album_to_child(a, count, dur));
     }
     let song_jsons: Vec<Value> = songs.iter().map(song_to_child).collect();
@@ -987,7 +1000,9 @@ pub async fn get_music_directory(
     }
 
     if let Ok(Some(artist)) = repo::find_artist(&state.pool, id).await {
-        let albums = repo::albums_by_artist(&state.pool, id).await.unwrap_or_default();
+        let albums = repo::albums_by_artist(&state.pool, id)
+            .await
+            .unwrap_or_default();
         let children: Vec<Value> = albums
             .iter()
             .map(|a| {
@@ -1015,7 +1030,9 @@ pub async fn get_music_directory(
     }
 
     if let Ok(Some(album)) = repo::find_album(&state.pool, id).await {
-        let songs = repo::songs_by_album(&state.pool, id).await.unwrap_or_default();
+        let songs = repo::songs_by_album(&state.pool, id)
+            .await
+            .unwrap_or_default();
         let children: Vec<Value> = songs.iter().map(song_to_child).collect();
         return response::ok_json(json!({
             "directory": {
@@ -1174,10 +1191,7 @@ pub async fn get_starred(
     res
 }
 
-pub async fn star(
-    state: web::Data<SubsonicState>,
-    query: web::Query<StarParams>,
-) -> HttpResponse {
+pub async fn star(state: web::Data<SubsonicState>, query: web::Query<StarParams>) -> HttpResponse {
     let q = query.into_inner();
     if let Some(r) = require_auth(
         &state,
@@ -1190,11 +1204,10 @@ pub async fn star(
     ) {
         return r;
     }
-    let target = q
-        .id
-        .as_deref()
-        .or(q.album_id.as_deref())
-        .or(q.artist_id.as_deref());
+    let target =
+        q.id.as_deref()
+            .or(q.album_id.as_deref())
+            .or(q.artist_id.as_deref());
     let Some(target) = target else {
         return response::ok_json(json!({}));
     };
@@ -1221,11 +1234,10 @@ pub async fn unstar(
     ) {
         return r;
     }
-    let target = q
-        .id
-        .as_deref()
-        .or(q.album_id.as_deref())
-        .or(q.artist_id.as_deref());
+    let target =
+        q.id.as_deref()
+            .or(q.album_id.as_deref())
+            .or(q.artist_id.as_deref());
     let Some(target) = target else {
         return response::ok_json(json!({}));
     };
@@ -1238,10 +1250,7 @@ pub async fn unstar(
 
 // ── Scrobble / NowPlaying ─────────────────────────────────────────────────────
 
-pub async fn scrobble(
-    state: web::Data<SubsonicState>,
-    query: web::Query<IdParam>,
-) -> HttpResponse {
+pub async fn scrobble(state: web::Data<SubsonicState>, query: web::Query<IdParam>) -> HttpResponse {
     let q = query.into_inner();
     if let Some(r) = require_auth(&state, &CommonLike::from_id(&q)) {
         return r;
@@ -1274,7 +1283,9 @@ pub async fn update_now_playing(
 // ── Playlists ─────────────────────────────────────────────────────────────────
 
 async fn playlist_json(state: &SubsonicState, pl: &crate::models::Playlist) -> Value {
-    let songs = repo::playlist_songs(&state.pool, &pl.id).await.unwrap_or_default();
+    let songs = repo::playlist_songs(&state.pool, &pl.id)
+        .await
+        .unwrap_or_default();
     let duration = songs.iter().map(|s| s.duration_ms / 1000).sum::<i64>();
     let mut m = serde_json::Map::new();
     m.insert("id".into(), json!(pl.id));
@@ -1325,7 +1336,9 @@ pub async fn get_playlist(
             return response::error_json(0, "database error");
         }
     };
-    let songs = repo::playlist_songs(&state.pool, id).await.unwrap_or_default();
+    let songs = repo::playlist_songs(&state.pool, id)
+        .await
+        .unwrap_or_default();
     let duration = songs.iter().map(|s| s.duration_ms / 1000).sum::<i64>();
     let entry: Vec<Value> = songs.iter().map(song_to_child).collect();
     let mut m = serde_json::Map::new();
@@ -1343,10 +1356,7 @@ pub async fn get_playlist(
     response::ok_json(json!({ "playlist": Value::Object(m) }))
 }
 
-pub async fn create_playlist(
-    state: web::Data<SubsonicState>,
-    req: HttpRequest,
-) -> HttpResponse {
+pub async fn create_playlist(state: web::Data<SubsonicState>, req: HttpRequest) -> HttpResponse {
     let qs = req.query_string();
     if let Some(r) = auth_from_qs(&state, qs) {
         return r;
@@ -1393,7 +1403,9 @@ pub async fn create_playlist(
         Ok(Some(p)) => p,
         _ => return response::error_json(0, "playlist persistence error"),
     };
-    let songs = repo::playlist_songs(&state.pool, &id).await.unwrap_or_default();
+    let songs = repo::playlist_songs(&state.pool, &id)
+        .await
+        .unwrap_or_default();
     let duration = songs.iter().map(|s| s.duration_ms / 1000).sum::<i64>();
     let entry: Vec<Value> = songs.iter().map(song_to_child).collect();
     let mut m = serde_json::Map::new();
@@ -1411,10 +1423,7 @@ pub async fn create_playlist(
     response::ok_json(json!({ "playlist": Value::Object(m) }))
 }
 
-pub async fn update_playlist(
-    state: web::Data<SubsonicState>,
-    req: HttpRequest,
-) -> HttpResponse {
+pub async fn update_playlist(state: web::Data<SubsonicState>, req: HttpRequest) -> HttpResponse {
     let qs = req.query_string();
     if let Some(r) = auth_from_qs(&state, qs) {
         return r;
@@ -1632,8 +1641,12 @@ pub async fn get_album_list(
         .unwrap_or_default();
     let mut album_jsons = Vec::with_capacity(albums.len());
     for a in &albums {
-        let count = repo::song_count_for_album(&state.pool, &a.id).await.unwrap_or(0);
-        let dur = repo::songs_for_album_duration(&state.pool, &a.id).await.unwrap_or(0);
+        let count = repo::song_count_for_album(&state.pool, &a.id)
+            .await
+            .unwrap_or(0);
+        let dur = repo::songs_for_album_duration(&state.pool, &a.id)
+            .await
+            .unwrap_or(0);
         album_jsons.push(album_to_child(a, count, dur));
     }
     response::ok_json(json!({ "albumList": { "album": album_jsons } }))
@@ -1667,8 +1680,12 @@ pub async fn search2(
     let artist_jsons: Vec<Value> = artists.iter().map(|a| artist_to_json(a, 0)).collect();
     let mut album_jsons = Vec::with_capacity(albums.len());
     for a in &albums {
-        let count = repo::song_count_for_album(&state.pool, &a.id).await.unwrap_or(0);
-        let dur = repo::songs_for_album_duration(&state.pool, &a.id).await.unwrap_or(0);
+        let count = repo::song_count_for_album(&state.pool, &a.id)
+            .await
+            .unwrap_or(0);
+        let dur = repo::songs_for_album_duration(&state.pool, &a.id)
+            .await
+            .unwrap_or(0);
         album_jsons.push(album_to_child(a, count, dur));
     }
     let song_jsons: Vec<Value> = songs.iter().map(song_to_child).collect();

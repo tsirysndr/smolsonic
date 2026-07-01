@@ -1,17 +1,17 @@
 use anstyle::{Color, RgbColor, Style};
-use clap::Parser;
 use clap::builder::Styles;
+use clap::Parser;
 use std::path::PathBuf;
 
 // ── Synthwave palette ─────────────────────────────────────────────────────────
 // Hot pink, electric purple, neon cyan, sunset yellow.
 
-const HOT_PINK: Color = Color::Rgb(RgbColor(0xff, 0x2a, 0x6d));      // #ff2a6d
+const HOT_PINK: Color = Color::Rgb(RgbColor(0xff, 0x2a, 0x6d)); // #ff2a6d
 const ELECTRIC_CYAN: Color = Color::Rgb(RgbColor(0x05, 0xd9, 0xe8)); // #05d9e8
-const NEON_MAGENTA: Color = Color::Rgb(RgbColor(0xff, 0x71, 0xce));  // #ff71ce
+const NEON_MAGENTA: Color = Color::Rgb(RgbColor(0xff, 0x71, 0xce)); // #ff71ce
 const ELECTRIC_PURPLE: Color = Color::Rgb(RgbColor(0xb9, 0x67, 0xff)); // #b967ff
-const SUNSET_YELLOW: Color = Color::Rgb(RgbColor(0xff, 0xd3, 0x19));  // #ffd319
-const LASER_RED: Color = Color::Rgb(RgbColor(0xff, 0x00, 0x6e));      // #ff006e
+const SUNSET_YELLOW: Color = Color::Rgb(RgbColor(0xff, 0xd3, 0x19)); // #ffd319
+const LASER_RED: Color = Color::Rgb(RgbColor(0xff, 0x00, 0x6e)); // #ff006e
 
 pub fn neon_styles() -> Styles {
     Styles::styled()
@@ -58,7 +58,7 @@ pub fn print_banner(
     jellyfin_endpoint: Option<(&str, u16)>,
 ) {
     // Synthwave 24-bit colors — match neon_styles().
-    let hot_pink = "\x1b[1;38;2;255;42;109m";    // #ff2a6d
+    let hot_pink = "\x1b[1;38;2;255;42;109m"; // #ff2a6d
     let electric_cyan = "\x1b[1;38;2;5;217;232m"; // #05d9e8
     let neon_magenta = "\x1b[1;38;2;255;113;206m"; // #ff71ce
     let electric_purple = "\x1b[1;38;2;185;103;255m"; // #b967ff

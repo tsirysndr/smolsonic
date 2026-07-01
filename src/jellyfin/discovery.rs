@@ -11,11 +11,7 @@ use tokio::net::UdpSocket;
 pub const DISCOVERY_PORT: u16 = 7359;
 const PROBE: &str = "Who is JellyfinServer?";
 
-pub async fn run(
-    server_name: String,
-    server_id: String,
-    http_port: u16,
-) -> Result<()> {
+pub async fn run(server_name: String, server_id: String, http_port: u16) -> Result<()> {
     let socket = UdpSocket::bind(("0.0.0.0", DISCOVERY_PORT))
         .await
         .with_context(|| format!("binding UDP {DISCOVERY_PORT} for jellyfin discovery"))?;

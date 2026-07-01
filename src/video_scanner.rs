@@ -3,8 +3,8 @@ use anyhow::{Context, Result};
 use md5::{Digest, Md5};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::SystemTime;
 use walkdir::WalkDir;
 
@@ -41,9 +41,8 @@ pub async fn scan(
 ) -> Result<VideoScanStats> {
     progress.running.store(true, Ordering::SeqCst);
     progress.count.store(0, Ordering::SeqCst);
-    std::fs::create_dir_all(&covers_dir).with_context(|| {
-        format!("creating covers dir {}", covers_dir.display())
-    })?;
+    std::fs::create_dir_all(&covers_dir)
+        .with_context(|| format!("creating covers dir {}", covers_dir.display()))?;
 
     let mut stats = VideoScanStats::default();
     let walker = WalkDir::new(&video_dir).follow_links(true).into_iter();
@@ -288,25 +287,19 @@ fn generate_thumbnail(
     }
 }
 
-async fn process_file(
-    pool: &Db,
-    path: &Path,
-    covers_dir: &Path,
-) -> Result<ProcessResult> {
-    let meta = std::fs::metadata(path)
-        .with_context(|| format!("stat {}", path.display()))?;
+async fn process_file(pool: &Db, path: &Path, covers_dir: &Path) -> Result<ProcessResult> {
+    let meta = std::fs::metadata(path).with_context(|| format!("stat {}", path.display()))?;
     let mtime = mtime_secs(path);
     let filesize = meta.len() as i64;
     let id = video_id(path);
     let path_str = path.to_string_lossy().to_string();
 
     // Cheap skip if mtime + size both unchanged.
-    let existing: Option<(i64, i64)> = sqlx::query_as(
-        "SELECT mtime, filesize FROM videos WHERE id = ?1",
-    )
-    .bind(&id)
-    .fetch_optional(pool)
-    .await?;
+    let existing: Option<(i64, i64)> =
+        sqlx::query_as("SELECT mtime, filesize FROM videos WHERE id = ?1")
+            .bind(&id)
+            .fetch_optional(pool)
+            .await?;
     if let Some((old_mtime, old_size)) = existing {
         if old_mtime == mtime && old_size == filesize {
             return Ok(ProcessResult::Skipped);
@@ -375,8 +368,9 @@ async fn process_file(
 }
 
 async fn reconcile_deletions(pool: &Db) -> Result<u64> {
-    let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT id, path FROM videos").fetch_all(pool).await?;
+    let rows: Vec<(String, String)> = sqlx::query_as("SELECT id, path FROM videos")
+        .fetch_all(pool)
+        .await?;
     let mut removed = 0u64;
     for (id, path) in rows {
         if !Path::new(&path).exists() {

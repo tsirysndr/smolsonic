@@ -49,7 +49,10 @@ fn name_filter_sql(
     let mut clauses: Vec<String> = Vec::new();
     let mut binds: Vec<String> = Vec::new();
     if let Some(prefix) = name_starts_with.filter(|s| !s.is_empty()) {
-        let escaped = prefix.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        let escaped = prefix
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
         binds.push(format!("{escaped}%"));
         clauses.push(format!(
             "{column} LIKE ?{} ESCAPE '\\' COLLATE NOCASE",
@@ -83,9 +86,8 @@ fn name_filter_sql(
 /// Distinct uppercase first letters of a name-style column, with non-alpha
 /// rows grouped under "#". Drives Jellyfin's alpha-jump rail.
 async fn name_prefixes(pool: &Db, table: &str, column: &str) -> Result<Vec<String>> {
-    let sql = format!(
-        "SELECT DISTINCT UPPER(SUBSTR({column}, 1, 1)) FROM {table} WHERE {column} != ''"
-    );
+    let sql =
+        format!("SELECT DISTINCT UPPER(SUBSTR({column}, 1, 1)) FROM {table} WHERE {column} != ''");
     let rows: Vec<(String,)> = sqlx::query_as(&sql).fetch_all(pool).await?;
     let mut letters: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut has_other = false;
@@ -337,11 +339,10 @@ pub async fn search_videos(pool: &Db, term: &str, limit: i64, offset: i64) -> Re
 }
 
 pub async fn all_artists(pool: &Db) -> Result<Vec<Artist>> {
-    let rows = sqlx::query_as::<_, Artist>(
-        "SELECT id, name FROM artists ORDER BY name COLLATE NOCASE",
-    )
-    .fetch_all(pool)
-    .await?;
+    let rows =
+        sqlx::query_as::<_, Artist>("SELECT id, name FROM artists ORDER BY name COLLATE NOCASE")
+            .fetch_all(pool)
+            .await?;
     Ok(rows)
 }
 
@@ -402,7 +403,12 @@ pub async fn count_songs(pool: &Db) -> Result<i64> {
     Ok(n)
 }
 
-pub async fn songs_by_artist(pool: &Db, artist_id: &str, limit: i64, offset: i64) -> Result<Vec<Song>> {
+pub async fn songs_by_artist(
+    pool: &Db,
+    artist_id: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<Song>> {
     let rows = sqlx::query_as::<_, Song>(
         "SELECT id, path, title, artist, artist_id, album, album_id, genre, track_number,
                 disc_number, year, duration_ms, bitrate, filesize, suffix, content_type, cover_art
@@ -552,21 +558,19 @@ pub async fn search_songs(pool: &Db, term: &str, limit: i64, offset: i64) -> Res
 }
 
 pub async fn songs_for_album_duration(pool: &Db, album_id: &str) -> Result<i64> {
-    let total: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(duration_ms), 0) FROM songs WHERE album_id = ?1",
-    )
-    .bind(album_id)
-    .fetch_one(pool)
-    .await?;
+    let total: i64 =
+        sqlx::query_scalar("SELECT COALESCE(SUM(duration_ms), 0) FROM songs WHERE album_id = ?1")
+            .bind(album_id)
+            .fetch_one(pool)
+            .await?;
     Ok(total / 1000)
 }
 
 pub async fn song_count_for_album(pool: &Db, album_id: &str) -> Result<i64> {
-    let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM songs WHERE album_id = ?1")
-            .bind(album_id)
-            .fetch_one(pool)
-            .await?;
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM songs WHERE album_id = ?1")
+        .bind(album_id)
+        .fetch_one(pool)
+        .await?;
     Ok(count)
 }
 
@@ -620,12 +624,7 @@ pub async fn distinct_genres(pool: &Db) -> Result<Vec<(String, i64, i64)>> {
     Ok(rows)
 }
 
-pub async fn songs_by_genre(
-    pool: &Db,
-    genre: &str,
-    count: i64,
-    offset: i64,
-) -> Result<Vec<Song>> {
+pub async fn songs_by_genre(pool: &Db, genre: &str, count: i64, offset: i64) -> Result<Vec<Song>> {
     let rows = sqlx::query_as::<_, Song>(
         "SELECT id, path, title, artist, artist_id, album, album_id, genre, track_number,
                 disc_number, year, duration_ms, bitrate, filesize, suffix, content_type, cover_art
@@ -759,12 +758,7 @@ pub async fn rename_playlist(pool: &Db, id: &str, name: &str, now: &str) -> Resu
     Ok(())
 }
 
-pub async fn set_playlist_comment(
-    pool: &Db,
-    id: &str,
-    comment: &str,
-    now: &str,
-) -> Result<()> {
+pub async fn set_playlist_comment(pool: &Db, id: &str, comment: &str, now: &str) -> Result<()> {
     sqlx::query("UPDATE playlists SET comment = ?2, updated_at = ?3 WHERE id = ?1")
         .bind(id)
         .bind(comment)

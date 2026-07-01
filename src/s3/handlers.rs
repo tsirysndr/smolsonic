@@ -51,10 +51,7 @@ fn find_existing(state: &S3State, key: &str) -> Option<PathBuf> {
     Some(m)
 }
 
-pub async fn list_buckets(
-    req: HttpRequest,
-    state: web::Data<S3State>,
-) -> HttpResponse {
+pub async fn list_buckets(req: HttpRequest, state: web::Data<S3State>) -> HttpResponse {
     if !looks_like_s3_client(&req) {
         return index_page();
     }
@@ -95,7 +92,9 @@ pub async fn head_bucket(
         REGION,
         SERVICE,
     ) {
-        return HttpResponse::Forbidden().reason(forbidden_reason(&e.0)).finish();
+        return HttpResponse::Forbidden()
+            .reason(forbidden_reason(&e.0))
+            .finish();
     }
     HttpResponse::Ok().finish()
 }
@@ -108,7 +107,8 @@ fn looks_like_s3_client(req: &HttpRequest) -> bool {
     if req.headers().contains_key("authorization") {
         return true;
     }
-    if req.headers().contains_key("x-amz-date") || req.headers().contains_key("x-amz-content-sha256")
+    if req.headers().contains_key("x-amz-date")
+        || req.headers().contains_key("x-amz-content-sha256")
     {
         return true;
     }
@@ -178,10 +178,7 @@ pub async fn list_objects(
     let prefix = q.get("prefix").cloned().unwrap_or_default();
     let delimiter = q.get("delimiter").cloned().unwrap_or_default();
     let start_after = q.get("start-after").cloned().unwrap_or_default();
-    let continuation_token = q
-        .get("continuation-token")
-        .cloned()
-        .unwrap_or_default();
+    let continuation_token = q.get("continuation-token").cloned().unwrap_or_default();
     let max_keys = q
         .get("max-keys")
         .and_then(|s| s.parse::<usize>().ok())
@@ -260,10 +257,16 @@ pub async fn list_objects(
     body.push_str(&format!("<Name>{}</Name>", xml_escape(BUCKET)));
     body.push_str(&format!("<Prefix>{}</Prefix>", xml_escape(&prefix)));
     body.push_str(&format!("<MaxKeys>{}</MaxKeys>", max_keys));
-    body.push_str(&format!("<KeyCount>{}</KeyCount>", contents.len() + common_prefixes.len()));
+    body.push_str(&format!(
+        "<KeyCount>{}</KeyCount>",
+        contents.len() + common_prefixes.len()
+    ));
     body.push_str(&format!("<IsTruncated>{}</IsTruncated>", is_truncated));
     if !delimiter.is_empty() {
-        body.push_str(&format!("<Delimiter>{}</Delimiter>", xml_escape(&delimiter)));
+        body.push_str(&format!(
+            "<Delimiter>{}</Delimiter>",
+            xml_escape(&delimiter)
+        ));
     }
     if list_type == "2" {
         if !continuation_token.is_empty() {
@@ -385,10 +388,7 @@ pub async fn head_object(
     match tokio::fs::metadata(&file_path).await {
         Ok(meta) if meta.is_file() => {
             let mime = mime_guess::from_path(&file_path).first_or_octet_stream();
-            let modified = meta
-                .modified()
-                .map(|t| DateTime::<Utc>::from(t))
-                .ok();
+            let modified = meta.modified().map(|t| DateTime::<Utc>::from(t)).ok();
             let mut resp = HttpResponse::Ok();
             resp.insert_header((header::CONTENT_TYPE, mime.essence_str()));
             resp.insert_header((header::CONTENT_LENGTH, meta.len()));
@@ -584,12 +584,15 @@ fn collect_entries(music_dir: &Path) -> std::io::Result<Vec<FileEntry>> {
             .map(|t| DateTime::<Utc>::from(t))
             .map(|t| t.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
             .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string());
-        let etag = format!("{:x}{:x}", size, meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or(0));
+        let etag = format!(
+            "{:x}{:x}",
+            size,
+            meta.modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        );
         out.push(FileEntry {
             key,
             size,
@@ -631,8 +634,12 @@ fn parse_query(qs: &str) -> BTreeMap<String, String> {
             None => (pair, ""),
         };
         out.insert(
-            urlencoding::decode(k).map(|s| s.into_owned()).unwrap_or_default(),
-            urlencoding::decode(v).map(|s| s.into_owned()).unwrap_or_default(),
+            urlencoding::decode(k)
+                .map(|s| s.into_owned())
+                .unwrap_or_default(),
+            urlencoding::decode(v)
+                .map(|s| s.into_owned())
+                .unwrap_or_default(),
         );
     }
     out

@@ -20,7 +20,12 @@ pub fn start(pool: Db, music_dir: PathBuf, covers_dir: PathBuf) {
         .expect("spawn watcher thread");
 }
 
-fn run(pool: Db, music_dir: PathBuf, covers_dir: PathBuf, rt: tokio::runtime::Handle) -> Result<()> {
+fn run(
+    pool: Db,
+    music_dir: PathBuf,
+    covers_dir: PathBuf,
+    rt: tokio::runtime::Handle,
+) -> Result<()> {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut debouncer = new_debouncer(DEBOUNCE, None, tx)?;
     debouncer.watch(&music_dir, RecursiveMode::Recursive)?;
@@ -109,12 +114,11 @@ async fn delete_songs_under(pool: &Db, dir: &str) -> Result<u64> {
     prefix.push(std::path::MAIN_SEPARATOR);
     let pattern = format!("{}%", escape_like(&prefix));
 
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT album_id, artist_id FROM songs WHERE path LIKE ?1 ESCAPE '\\'",
-    )
-    .bind(&pattern)
-    .fetch_all(pool)
-    .await?;
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT album_id, artist_id FROM songs WHERE path LIKE ?1 ESCAPE '\\'")
+            .bind(&pattern)
+            .fetch_all(pool)
+            .await?;
 
     if rows.is_empty() {
         return Ok(0);

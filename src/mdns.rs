@@ -69,9 +69,7 @@ pub fn start(
             .register(s3_info)
             .context("mdns: failed to register s3 service")?;
         fullnames.push(s3_full);
-        tracing::info!(
-            "mdns: broadcasting {S3_SERVICE} as {s3_instance} on {ips:?}:{s3_port}"
-        );
+        tracing::info!("mdns: broadcasting {S3_SERVICE} as {s3_instance} on {ips:?}:{s3_port}");
     }
 
     if let Some((_, jellyfin_port, server_id)) = jellyfin {
@@ -145,13 +143,36 @@ fn is_virtual_iface(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     const PREFIXES: &[&str] = &[
         // Docker / container bridges
-        "docker", "br-", "veth", "cni", "flannel", "cali", "weave",
+        "docker",
+        "br-",
+        "veth",
+        "cni",
+        "flannel",
+        "cali",
+        "weave",
         // VM hypervisors
-        "vboxnet", "vmnet", "vnic", "virbr", "vif", "vmk",
+        "vboxnet",
+        "vmnet",
+        "vnic",
+        "virbr",
+        "vif",
+        "vmk",
         // Tunnels / VPN / mesh
-        "tun", "tap", "utun", "wg", "zt", "tailscale", "ppp", "gif", "stf",
+        "tun",
+        "tap",
+        "utun",
+        "wg",
+        "zt",
+        "tailscale",
+        "ppp",
+        "gif",
+        "stf",
         // Apple-specific virtual interfaces
-        "awdl", "llw", "anpi", "ap", "bridge",
+        "awdl",
+        "llw",
+        "anpi",
+        "ap",
+        "bridge",
     ];
     PREFIXES.iter().any(|p| lower.starts_with(p))
 }

@@ -20,11 +20,7 @@ pub struct SubsonicState {
     pub scan_progress: Arc<ScanProgress>,
 }
 
-pub async fn start(
-    cfg: Config,
-    pool: Db,
-    scan_progress: Arc<ScanProgress>,
-) -> anyhow::Result<()> {
+pub async fn start(cfg: Config, pool: Db, scan_progress: Arc<ScanProgress>) -> anyhow::Result<()> {
     let addr = format!("{}:{}", cfg.host, cfg.port);
     let state = web::Data::new(SubsonicState {
         pool,
@@ -52,329 +48,329 @@ pub async fn start(
 /// `App::configure(configure_routes)` against an in-memory state.
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.route("/", web::get().to(handlers::index))
-            .route("/rest/ping{_:(\\.view)?}", web::get().to(handlers::ping))
-            .route("/rest/ping{_:(\\.view)?}", web::post().to(handlers::ping))
-            .route(
-                "/rest/getUser{_:(\\.view)?}",
-                web::get().to(handlers::get_user),
-            )
-            .route(
-                "/rest/getUser{_:(\\.view)?}",
-                web::post().to(handlers::get_user),
-            )
-            .route(
-                "/rest/getMusicFolders{_:(\\.view)?}",
-                web::get().to(handlers::get_music_folders),
-            )
-            .route(
-                "/rest/getMusicFolders{_:(\\.view)?}",
-                web::post().to(handlers::get_music_folders),
-            )
-            .route(
-                "/rest/getArtists{_:(\\.view)?}",
-                web::get().to(handlers::get_artists),
-            )
-            .route(
-                "/rest/getArtists{_:(\\.view)?}",
-                web::post().to(handlers::get_artists),
-            )
-            .route(
-                "/rest/getArtist{_:(\\.view)?}",
-                web::get().to(handlers::get_artist),
-            )
-            .route(
-                "/rest/getArtist{_:(\\.view)?}",
-                web::post().to(handlers::get_artist),
-            )
-            .route(
-                "/rest/getAlbum{_:(\\.view)?}",
-                web::get().to(handlers::get_album),
-            )
-            .route(
-                "/rest/getAlbum{_:(\\.view)?}",
-                web::post().to(handlers::get_album),
-            )
-            .route(
-                "/rest/getSong{_:(\\.view)?}",
-                web::get().to(handlers::get_song),
-            )
-            .route(
-                "/rest/getSong{_:(\\.view)?}",
-                web::post().to(handlers::get_song),
-            )
-            .route(
-                "/rest/getAlbumList2{_:(\\.view)?}",
-                web::get().to(handlers::get_album_list2),
-            )
-            .route(
-                "/rest/getAlbumList2{_:(\\.view)?}",
-                web::post().to(handlers::get_album_list2),
-            )
-            .route(
-                "/rest/getCoverArt{_:(\\.view)?}",
-                web::get().to(handlers::get_cover_art),
-            )
-            .route(
-                "/rest/getCoverArt{_:(\\.view)?}",
-                web::post().to(handlers::get_cover_art),
-            )
-            .route(
-                "/rest/stream{_:(\\.view)?}",
-                web::get().to(handlers::stream),
-            )
-            .route(
-                "/rest/stream{_:(\\.view)?}",
-                web::post().to(handlers::stream),
-            )
-            .route(
-                "/rest/download{_:(\\.view)?}",
-                web::get().to(handlers::stream),
-            )
-            .route(
-                "/rest/download{_:(\\.view)?}",
-                web::post().to(handlers::stream),
-            )
-            .route(
-                "/rest/search3{_:(\\.view)?}",
-                web::get().to(handlers::search3),
-            )
-            .route(
-                "/rest/search3{_:(\\.view)?}",
-                web::post().to(handlers::search3),
-            )
-            .route(
-                "/rest/getScanStatus{_:(\\.view)?}",
-                web::get().to(handlers::get_scan_status),
-            )
-            .route(
-                "/rest/getScanStatus{_:(\\.view)?}",
-                web::post().to(handlers::get_scan_status),
-            )
-            .route(
-                "/rest/startScan{_:(\\.view)?}",
-                web::get().to(handlers::start_scan),
-            )
-            .route(
-                "/rest/startScan{_:(\\.view)?}",
-                web::post().to(handlers::start_scan),
-            )
-            // Folder browsing
-            .route(
-                "/rest/getIndexes{_:(\\.view)?}",
-                web::get().to(handlers::get_indexes),
-            )
-            .route(
-                "/rest/getIndexes{_:(\\.view)?}",
-                web::post().to(handlers::get_indexes),
-            )
-            .route(
-                "/rest/getMusicDirectory{_:(\\.view)?}",
-                web::get().to(handlers::get_music_directory),
-            )
-            .route(
-                "/rest/getMusicDirectory{_:(\\.view)?}",
-                web::post().to(handlers::get_music_directory),
-            )
-            // Genres
-            .route(
-                "/rest/getGenres{_:(\\.view)?}",
-                web::get().to(handlers::get_genres),
-            )
-            .route(
-                "/rest/getGenres{_:(\\.view)?}",
-                web::post().to(handlers::get_genres),
-            )
-            .route(
-                "/rest/getSongsByGenre{_:(\\.view)?}",
-                web::get().to(handlers::get_songs_by_genre),
-            )
-            .route(
-                "/rest/getSongsByGenre{_:(\\.view)?}",
-                web::post().to(handlers::get_songs_by_genre),
-            )
-            // Random / starred
-            .route(
-                "/rest/getRandomSongs{_:(\\.view)?}",
-                web::get().to(handlers::get_random_songs),
-            )
-            .route(
-                "/rest/getRandomSongs{_:(\\.view)?}",
-                web::post().to(handlers::get_random_songs),
-            )
-            .route(
-                "/rest/getStarred{_:(\\.view)?}",
-                web::get().to(handlers::get_starred),
-            )
-            .route(
-                "/rest/getStarred{_:(\\.view)?}",
-                web::post().to(handlers::get_starred),
-            )
-            .route(
-                "/rest/getStarred2{_:(\\.view)?}",
-                web::get().to(handlers::get_starred2),
-            )
-            .route(
-                "/rest/getStarred2{_:(\\.view)?}",
-                web::post().to(handlers::get_starred2),
-            )
-            .route("/rest/star{_:(\\.view)?}", web::get().to(handlers::star))
-            .route("/rest/star{_:(\\.view)?}", web::post().to(handlers::star))
-            .route(
-                "/rest/unstar{_:(\\.view)?}",
-                web::get().to(handlers::unstar),
-            )
-            .route(
-                "/rest/unstar{_:(\\.view)?}",
-                web::post().to(handlers::unstar),
-            )
-            // Scrobble + now-playing
-            .route(
-                "/rest/scrobble{_:(\\.view)?}",
-                web::get().to(handlers::scrobble),
-            )
-            .route(
-                "/rest/scrobble{_:(\\.view)?}",
-                web::post().to(handlers::scrobble),
-            )
-            .route(
-                "/rest/getNowPlaying{_:(\\.view)?}",
-                web::get().to(handlers::get_now_playing),
-            )
-            .route(
-                "/rest/getNowPlaying{_:(\\.view)?}",
-                web::post().to(handlers::get_now_playing),
-            )
-            .route(
-                "/rest/updateNowPlaying{_:(\\.view)?}",
-                web::get().to(handlers::update_now_playing),
-            )
-            .route(
-                "/rest/updateNowPlaying{_:(\\.view)?}",
-                web::post().to(handlers::update_now_playing),
-            )
-            // Playlists
-            .route(
-                "/rest/getPlaylists{_:(\\.view)?}",
-                web::get().to(handlers::get_playlists),
-            )
-            .route(
-                "/rest/getPlaylists{_:(\\.view)?}",
-                web::post().to(handlers::get_playlists),
-            )
-            .route(
-                "/rest/getPlaylist{_:(\\.view)?}",
-                web::get().to(handlers::get_playlist),
-            )
-            .route(
-                "/rest/getPlaylist{_:(\\.view)?}",
-                web::post().to(handlers::get_playlist),
-            )
-            .route(
-                "/rest/createPlaylist{_:(\\.view)?}",
-                web::get().to(handlers::create_playlist),
-            )
-            .route(
-                "/rest/createPlaylist{_:(\\.view)?}",
-                web::post().to(handlers::create_playlist),
-            )
-            .route(
-                "/rest/updatePlaylist{_:(\\.view)?}",
-                web::get().to(handlers::update_playlist),
-            )
-            .route(
-                "/rest/updatePlaylist{_:(\\.view)?}",
-                web::post().to(handlers::update_playlist),
-            )
-            .route(
-                "/rest/deletePlaylist{_:(\\.view)?}",
-                web::get().to(handlers::delete_playlist),
-            )
-            .route(
-                "/rest/deletePlaylist{_:(\\.view)?}",
-                web::post().to(handlers::delete_playlist),
-            )
-            // Artist / album info / similar / top / lyrics
-            .route(
-                "/rest/getArtistInfo{_:(\\.view)?}",
-                web::get().to(handlers::get_artist_info),
-            )
-            .route(
-                "/rest/getArtistInfo{_:(\\.view)?}",
-                web::post().to(handlers::get_artist_info),
-            )
-            .route(
-                "/rest/getArtistInfo2{_:(\\.view)?}",
-                web::get().to(handlers::get_artist_info2),
-            )
-            .route(
-                "/rest/getArtistInfo2{_:(\\.view)?}",
-                web::post().to(handlers::get_artist_info2),
-            )
-            .route(
-                "/rest/getAlbumInfo{_:(\\.view)?}",
-                web::get().to(handlers::get_album_info),
-            )
-            .route(
-                "/rest/getAlbumInfo{_:(\\.view)?}",
-                web::post().to(handlers::get_album_info),
-            )
-            .route(
-                "/rest/getAlbumInfo2{_:(\\.view)?}",
-                web::get().to(handlers::get_album_info),
-            )
-            .route(
-                "/rest/getAlbumInfo2{_:(\\.view)?}",
-                web::post().to(handlers::get_album_info),
-            )
-            .route(
-                "/rest/getSimilarSongs{_:(\\.view)?}",
-                web::get().to(handlers::get_similar_songs),
-            )
-            .route(
-                "/rest/getSimilarSongs{_:(\\.view)?}",
-                web::post().to(handlers::get_similar_songs),
-            )
-            .route(
-                "/rest/getSimilarSongs2{_:(\\.view)?}",
-                web::get().to(handlers::get_similar_songs2),
-            )
-            .route(
-                "/rest/getSimilarSongs2{_:(\\.view)?}",
-                web::post().to(handlers::get_similar_songs2),
-            )
-            .route(
-                "/rest/getTopSongs{_:(\\.view)?}",
-                web::get().to(handlers::get_top_songs),
-            )
-            .route(
-                "/rest/getTopSongs{_:(\\.view)?}",
-                web::post().to(handlers::get_top_songs),
-            )
-            .route(
-                "/rest/getLyrics{_:(\\.view)?}",
-                web::get().to(handlers::get_lyrics),
-            )
-            .route(
-                "/rest/getLyrics{_:(\\.view)?}",
-                web::post().to(handlers::get_lyrics),
-            )
-            // Aliases for older API versions
-            .route(
-                "/rest/getAlbumList{_:(\\.view)?}",
-                web::get().to(handlers::get_album_list),
-            )
-            .route(
-                "/rest/getAlbumList{_:(\\.view)?}",
-                web::post().to(handlers::get_album_list),
-            )
-            .route(
-                "/rest/search2{_:(\\.view)?}",
-                web::get().to(handlers::search2),
-            )
-            .route(
-                "/rest/search2{_:(\\.view)?}",
-                web::post().to(handlers::search2),
-            );
+        .route("/rest/ping{_:(\\.view)?}", web::get().to(handlers::ping))
+        .route("/rest/ping{_:(\\.view)?}", web::post().to(handlers::ping))
+        .route(
+            "/rest/getUser{_:(\\.view)?}",
+            web::get().to(handlers::get_user),
+        )
+        .route(
+            "/rest/getUser{_:(\\.view)?}",
+            web::post().to(handlers::get_user),
+        )
+        .route(
+            "/rest/getMusicFolders{_:(\\.view)?}",
+            web::get().to(handlers::get_music_folders),
+        )
+        .route(
+            "/rest/getMusicFolders{_:(\\.view)?}",
+            web::post().to(handlers::get_music_folders),
+        )
+        .route(
+            "/rest/getArtists{_:(\\.view)?}",
+            web::get().to(handlers::get_artists),
+        )
+        .route(
+            "/rest/getArtists{_:(\\.view)?}",
+            web::post().to(handlers::get_artists),
+        )
+        .route(
+            "/rest/getArtist{_:(\\.view)?}",
+            web::get().to(handlers::get_artist),
+        )
+        .route(
+            "/rest/getArtist{_:(\\.view)?}",
+            web::post().to(handlers::get_artist),
+        )
+        .route(
+            "/rest/getAlbum{_:(\\.view)?}",
+            web::get().to(handlers::get_album),
+        )
+        .route(
+            "/rest/getAlbum{_:(\\.view)?}",
+            web::post().to(handlers::get_album),
+        )
+        .route(
+            "/rest/getSong{_:(\\.view)?}",
+            web::get().to(handlers::get_song),
+        )
+        .route(
+            "/rest/getSong{_:(\\.view)?}",
+            web::post().to(handlers::get_song),
+        )
+        .route(
+            "/rest/getAlbumList2{_:(\\.view)?}",
+            web::get().to(handlers::get_album_list2),
+        )
+        .route(
+            "/rest/getAlbumList2{_:(\\.view)?}",
+            web::post().to(handlers::get_album_list2),
+        )
+        .route(
+            "/rest/getCoverArt{_:(\\.view)?}",
+            web::get().to(handlers::get_cover_art),
+        )
+        .route(
+            "/rest/getCoverArt{_:(\\.view)?}",
+            web::post().to(handlers::get_cover_art),
+        )
+        .route(
+            "/rest/stream{_:(\\.view)?}",
+            web::get().to(handlers::stream),
+        )
+        .route(
+            "/rest/stream{_:(\\.view)?}",
+            web::post().to(handlers::stream),
+        )
+        .route(
+            "/rest/download{_:(\\.view)?}",
+            web::get().to(handlers::stream),
+        )
+        .route(
+            "/rest/download{_:(\\.view)?}",
+            web::post().to(handlers::stream),
+        )
+        .route(
+            "/rest/search3{_:(\\.view)?}",
+            web::get().to(handlers::search3),
+        )
+        .route(
+            "/rest/search3{_:(\\.view)?}",
+            web::post().to(handlers::search3),
+        )
+        .route(
+            "/rest/getScanStatus{_:(\\.view)?}",
+            web::get().to(handlers::get_scan_status),
+        )
+        .route(
+            "/rest/getScanStatus{_:(\\.view)?}",
+            web::post().to(handlers::get_scan_status),
+        )
+        .route(
+            "/rest/startScan{_:(\\.view)?}",
+            web::get().to(handlers::start_scan),
+        )
+        .route(
+            "/rest/startScan{_:(\\.view)?}",
+            web::post().to(handlers::start_scan),
+        )
+        // Folder browsing
+        .route(
+            "/rest/getIndexes{_:(\\.view)?}",
+            web::get().to(handlers::get_indexes),
+        )
+        .route(
+            "/rest/getIndexes{_:(\\.view)?}",
+            web::post().to(handlers::get_indexes),
+        )
+        .route(
+            "/rest/getMusicDirectory{_:(\\.view)?}",
+            web::get().to(handlers::get_music_directory),
+        )
+        .route(
+            "/rest/getMusicDirectory{_:(\\.view)?}",
+            web::post().to(handlers::get_music_directory),
+        )
+        // Genres
+        .route(
+            "/rest/getGenres{_:(\\.view)?}",
+            web::get().to(handlers::get_genres),
+        )
+        .route(
+            "/rest/getGenres{_:(\\.view)?}",
+            web::post().to(handlers::get_genres),
+        )
+        .route(
+            "/rest/getSongsByGenre{_:(\\.view)?}",
+            web::get().to(handlers::get_songs_by_genre),
+        )
+        .route(
+            "/rest/getSongsByGenre{_:(\\.view)?}",
+            web::post().to(handlers::get_songs_by_genre),
+        )
+        // Random / starred
+        .route(
+            "/rest/getRandomSongs{_:(\\.view)?}",
+            web::get().to(handlers::get_random_songs),
+        )
+        .route(
+            "/rest/getRandomSongs{_:(\\.view)?}",
+            web::post().to(handlers::get_random_songs),
+        )
+        .route(
+            "/rest/getStarred{_:(\\.view)?}",
+            web::get().to(handlers::get_starred),
+        )
+        .route(
+            "/rest/getStarred{_:(\\.view)?}",
+            web::post().to(handlers::get_starred),
+        )
+        .route(
+            "/rest/getStarred2{_:(\\.view)?}",
+            web::get().to(handlers::get_starred2),
+        )
+        .route(
+            "/rest/getStarred2{_:(\\.view)?}",
+            web::post().to(handlers::get_starred2),
+        )
+        .route("/rest/star{_:(\\.view)?}", web::get().to(handlers::star))
+        .route("/rest/star{_:(\\.view)?}", web::post().to(handlers::star))
+        .route(
+            "/rest/unstar{_:(\\.view)?}",
+            web::get().to(handlers::unstar),
+        )
+        .route(
+            "/rest/unstar{_:(\\.view)?}",
+            web::post().to(handlers::unstar),
+        )
+        // Scrobble + now-playing
+        .route(
+            "/rest/scrobble{_:(\\.view)?}",
+            web::get().to(handlers::scrobble),
+        )
+        .route(
+            "/rest/scrobble{_:(\\.view)?}",
+            web::post().to(handlers::scrobble),
+        )
+        .route(
+            "/rest/getNowPlaying{_:(\\.view)?}",
+            web::get().to(handlers::get_now_playing),
+        )
+        .route(
+            "/rest/getNowPlaying{_:(\\.view)?}",
+            web::post().to(handlers::get_now_playing),
+        )
+        .route(
+            "/rest/updateNowPlaying{_:(\\.view)?}",
+            web::get().to(handlers::update_now_playing),
+        )
+        .route(
+            "/rest/updateNowPlaying{_:(\\.view)?}",
+            web::post().to(handlers::update_now_playing),
+        )
+        // Playlists
+        .route(
+            "/rest/getPlaylists{_:(\\.view)?}",
+            web::get().to(handlers::get_playlists),
+        )
+        .route(
+            "/rest/getPlaylists{_:(\\.view)?}",
+            web::post().to(handlers::get_playlists),
+        )
+        .route(
+            "/rest/getPlaylist{_:(\\.view)?}",
+            web::get().to(handlers::get_playlist),
+        )
+        .route(
+            "/rest/getPlaylist{_:(\\.view)?}",
+            web::post().to(handlers::get_playlist),
+        )
+        .route(
+            "/rest/createPlaylist{_:(\\.view)?}",
+            web::get().to(handlers::create_playlist),
+        )
+        .route(
+            "/rest/createPlaylist{_:(\\.view)?}",
+            web::post().to(handlers::create_playlist),
+        )
+        .route(
+            "/rest/updatePlaylist{_:(\\.view)?}",
+            web::get().to(handlers::update_playlist),
+        )
+        .route(
+            "/rest/updatePlaylist{_:(\\.view)?}",
+            web::post().to(handlers::update_playlist),
+        )
+        .route(
+            "/rest/deletePlaylist{_:(\\.view)?}",
+            web::get().to(handlers::delete_playlist),
+        )
+        .route(
+            "/rest/deletePlaylist{_:(\\.view)?}",
+            web::post().to(handlers::delete_playlist),
+        )
+        // Artist / album info / similar / top / lyrics
+        .route(
+            "/rest/getArtistInfo{_:(\\.view)?}",
+            web::get().to(handlers::get_artist_info),
+        )
+        .route(
+            "/rest/getArtistInfo{_:(\\.view)?}",
+            web::post().to(handlers::get_artist_info),
+        )
+        .route(
+            "/rest/getArtistInfo2{_:(\\.view)?}",
+            web::get().to(handlers::get_artist_info2),
+        )
+        .route(
+            "/rest/getArtistInfo2{_:(\\.view)?}",
+            web::post().to(handlers::get_artist_info2),
+        )
+        .route(
+            "/rest/getAlbumInfo{_:(\\.view)?}",
+            web::get().to(handlers::get_album_info),
+        )
+        .route(
+            "/rest/getAlbumInfo{_:(\\.view)?}",
+            web::post().to(handlers::get_album_info),
+        )
+        .route(
+            "/rest/getAlbumInfo2{_:(\\.view)?}",
+            web::get().to(handlers::get_album_info),
+        )
+        .route(
+            "/rest/getAlbumInfo2{_:(\\.view)?}",
+            web::post().to(handlers::get_album_info),
+        )
+        .route(
+            "/rest/getSimilarSongs{_:(\\.view)?}",
+            web::get().to(handlers::get_similar_songs),
+        )
+        .route(
+            "/rest/getSimilarSongs{_:(\\.view)?}",
+            web::post().to(handlers::get_similar_songs),
+        )
+        .route(
+            "/rest/getSimilarSongs2{_:(\\.view)?}",
+            web::get().to(handlers::get_similar_songs2),
+        )
+        .route(
+            "/rest/getSimilarSongs2{_:(\\.view)?}",
+            web::post().to(handlers::get_similar_songs2),
+        )
+        .route(
+            "/rest/getTopSongs{_:(\\.view)?}",
+            web::get().to(handlers::get_top_songs),
+        )
+        .route(
+            "/rest/getTopSongs{_:(\\.view)?}",
+            web::post().to(handlers::get_top_songs),
+        )
+        .route(
+            "/rest/getLyrics{_:(\\.view)?}",
+            web::get().to(handlers::get_lyrics),
+        )
+        .route(
+            "/rest/getLyrics{_:(\\.view)?}",
+            web::post().to(handlers::get_lyrics),
+        )
+        // Aliases for older API versions
+        .route(
+            "/rest/getAlbumList{_:(\\.view)?}",
+            web::get().to(handlers::get_album_list),
+        )
+        .route(
+            "/rest/getAlbumList{_:(\\.view)?}",
+            web::post().to(handlers::get_album_list),
+        )
+        .route(
+            "/rest/search2{_:(\\.view)?}",
+            web::get().to(handlers::search2),
+        )
+        .route(
+            "/rest/search2{_:(\\.view)?}",
+            web::post().to(handlers::search2),
+        );
 }
 
 #[cfg(test)]
@@ -410,27 +406,44 @@ mod tests {
         p
     }
 
-    async fn fixture_state(music_dir: &std::path::Path, covers_dir: &std::path::Path) -> SubsonicState {
+    async fn fixture_state(
+        music_dir: &std::path::Path,
+        covers_dir: &std::path::Path,
+    ) -> SubsonicState {
         let db_path = music_dir.join("test.db");
         let pool = db::init(&db_path).await.unwrap();
 
         // Two artists, two albums, two songs — enough to exercise list/index/search.
         let song_a = music_dir.join("song_a.mp3");
         // A small but recognizable payload so range checks have real data.
-        std::fs::File::create(&song_a).unwrap().write_all(&vec![1u8; 4096]).unwrap();
+        std::fs::File::create(&song_a)
+            .unwrap()
+            .write_all(&vec![1u8; 4096])
+            .unwrap();
         let song_b = music_dir.join("song_b.mp3");
-        std::fs::File::create(&song_b).unwrap().write_all(&vec![2u8; 2048]).unwrap();
+        std::fs::File::create(&song_b)
+            .unwrap()
+            .write_all(&vec![2u8; 2048])
+            .unwrap();
 
         sqlx::query("INSERT INTO artists (id, name, name_lower) VALUES ('ar-1','Aretha','aretha')")
-            .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO artists (id, name, name_lower) VALUES ('ar-2','Beethoven','beethoven')")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO artists (id, name, name_lower) VALUES ('ar-2','Beethoven','beethoven')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO albums (id, title, artist, artist_id, year, cover_art)
              VALUES ('al-1','Respect','Aretha','ar-1',1967,NULL),
                     ('al-2','Ninth','Beethoven','ar-2',1824,NULL)",
         )
-        .execute(&pool).await.unwrap();
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO songs (id, path, title, artist, artist_id, album, album_id, genre,
                 track_number, disc_number, year, duration_ms, bitrate, filesize, suffix, content_type, cover_art, mtime)
@@ -472,7 +485,9 @@ mod tests {
         let dir = tempdir("ping_ok");
         let state = fixture_state(&dir, &dir).await;
         let app = test::init_service(
-            App::new().app_data(build_app_state(state)).configure(configure_routes),
+            App::new()
+                .app_data(build_app_state(state))
+                .configure(configure_routes),
         )
         .await;
 
@@ -491,7 +506,9 @@ mod tests {
         let dir = tempdir("ping_view");
         let state = fixture_state(&dir, &dir).await;
         let app = test::init_service(
-            App::new().app_data(build_app_state(state)).configure(configure_routes),
+            App::new()
+                .app_data(build_app_state(state))
+                .configure(configure_routes),
         )
         .await;
 
@@ -516,7 +533,9 @@ mod tests {
         let dir = tempdir("ping_bad");
         let state = fixture_state(&dir, &dir).await;
         let app = test::init_service(
-            App::new().app_data(build_app_state(state)).configure(configure_routes),
+            App::new()
+                .app_data(build_app_state(state))
+                .configure(configure_routes),
         )
         .await;
 
@@ -536,7 +555,9 @@ mod tests {
         let dir = tempdir("folders");
         let state = fixture_state(&dir, &dir).await;
         let app = test::init_service(
-            App::new().app_data(build_app_state(state)).configure(configure_routes),
+            App::new()
+                .app_data(build_app_state(state))
+                .configure(configure_routes),
         )
         .await;
 
@@ -555,7 +576,9 @@ mod tests {
         let dir = tempdir("browse");
         let state = fixture_state(&dir, &dir).await;
         let app = test::init_service(
-            App::new().app_data(build_app_state(state)).configure(configure_routes),
+            App::new()
+                .app_data(build_app_state(state))
+                .configure(configure_routes),
         )
         .await;
 
@@ -615,7 +638,9 @@ mod tests {
         let dir = tempdir("search");
         let state = fixture_state(&dir, &dir).await;
         let app = test::init_service(
-            App::new().app_data(build_app_state(state)).configure(configure_routes),
+            App::new()
+                .app_data(build_app_state(state))
+                .configure(configure_routes),
         )
         .await;
 
@@ -625,8 +650,16 @@ mod tests {
         let body: Value = test::call_and_read_body_json(&app, req).await;
         let sr = &body["subsonic-response"]["searchResult3"];
         // "Respect" matches one album and one song; the artist Aretha isn't a name hit.
-        assert!(sr["song"].as_array().unwrap().iter().any(|s| s["title"] == "Respect"));
-        assert!(sr["album"].as_array().unwrap().iter().any(|a| a["name"] == "Respect"));
+        assert!(sr["song"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["title"] == "Respect"));
+        assert!(sr["album"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["name"] == "Respect"));
     }
 
     #[actix_web::test]
@@ -634,7 +667,9 @@ mod tests {
         let dir = tempdir("stream");
         let state = fixture_state(&dir, &dir).await;
         let app = test::init_service(
-            App::new().app_data(build_app_state(state)).configure(configure_routes),
+            App::new()
+                .app_data(build_app_state(state))
+                .configure(configure_routes),
         )
         .await;
 
@@ -645,11 +680,19 @@ mod tests {
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
-            resp.headers().get("content-type").unwrap().to_str().unwrap(),
+            resp.headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "audio/mpeg"
         );
         assert_eq!(
-            resp.headers().get("content-length").unwrap().to_str().unwrap(),
+            resp.headers()
+                .get("content-length")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "4096"
         );
         let bytes = test::read_body(resp).await;
@@ -664,10 +707,19 @@ mod tests {
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
         assert_eq!(
-            resp.headers().get("content-length").unwrap().to_str().unwrap(),
+            resp.headers()
+                .get("content-length")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "100"
         );
-        let cr = resp.headers().get("content-range").unwrap().to_str().unwrap();
+        let cr = resp
+            .headers()
+            .get("content-range")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert_eq!(cr, "bytes 0-99/4096");
 
         // Bad auth on stream returns failed envelope, not a partial.
@@ -691,7 +743,9 @@ mod tests {
         let dir = tempdir("cover");
         let state = fixture_state(&dir, &dir).await;
         let app = test::init_service(
-            App::new().app_data(build_app_state(state)).configure(configure_routes),
+            App::new()
+                .app_data(build_app_state(state))
+                .configure(configure_routes),
         )
         .await;
 
@@ -709,7 +763,9 @@ mod tests {
         // Pre-set count to a known value to confirm it's wired through.
         state.scan_progress.count.store(42, Ordering::SeqCst);
         let app = test::init_service(
-            App::new().app_data(build_app_state(state)).configure(configure_routes),
+            App::new()
+                .app_data(build_app_state(state))
+                .configure(configure_routes),
         )
         .await;
 

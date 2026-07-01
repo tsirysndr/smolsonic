@@ -100,7 +100,11 @@ pub fn extract_token(req: &HttpRequest) -> Option<String> {
         let v = it.next().unwrap_or("");
         if k.eq_ignore_ascii_case("api_key") || k.eq_ignore_ascii_case("apikey") {
             if !v.is_empty() {
-                return Some(urlencoding::decode(v).map(|s| s.into_owned()).unwrap_or_else(|_| v.to_string()));
+                return Some(
+                    urlencoding::decode(v)
+                        .map(|s| s.into_owned())
+                        .unwrap_or_else(|_| v.to_string()),
+                );
             }
         }
     }
@@ -108,13 +112,12 @@ pub fn extract_token(req: &HttpRequest) -> Option<String> {
 }
 
 pub async fn token_valid(pool: &Db, token: &str) -> bool {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT user_id FROM jellyfin_tokens WHERE token = ?1",
-    )
-    .bind(token)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None);
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT user_id FROM jellyfin_tokens WHERE token = ?1")
+            .bind(token)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
     row.is_some()
 }
 
@@ -254,10 +257,7 @@ mod tests {
     fn extract_token_prefers_x_emby_token_header() {
         let req = TestRequest::default()
             .insert_header(("X-Emby-Token", "header-token"))
-            .insert_header((
-                "X-Emby-Authorization",
-                r#"MediaBrowser Token="auth-token""#,
-            ))
+            .insert_header(("X-Emby-Authorization", r#"MediaBrowser Token="auth-token""#))
             .to_http_request();
         assert_eq!(extract_token(&req).as_deref(), Some("header-token"));
     }
@@ -265,10 +265,7 @@ mod tests {
     #[test]
     fn extract_token_falls_back_to_authorization_header() {
         let req = TestRequest::default()
-            .insert_header((
-                "Authorization",
-                r#"MediaBrowser Token="auth-token""#,
-            ))
+            .insert_header(("Authorization", r#"MediaBrowser Token="auth-token""#))
             .to_http_request();
         assert_eq!(extract_token(&req).as_deref(), Some("auth-token"));
     }
@@ -338,12 +335,10 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        sqlx::query(
-            "CREATE TABLE jellyfin_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("CREATE TABLE jellyfin_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let a = ensure_server_id(&pool).await.unwrap();
         let b = ensure_server_id(&pool).await.unwrap();

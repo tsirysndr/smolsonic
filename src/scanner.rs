@@ -6,8 +6,8 @@ use lofty::probe::Probe;
 use lofty::tag::Accessor;
 use md5::{Digest, Md5};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::SystemTime;
 use walkdir::WalkDir;
 
@@ -39,9 +39,8 @@ pub async fn scan(
 ) -> Result<ScanStats> {
     progress.running.store(true, Ordering::SeqCst);
     progress.count.store(0, Ordering::SeqCst);
-    std::fs::create_dir_all(&covers_dir).with_context(|| {
-        format!("creating covers dir {}", covers_dir.display())
-    })?;
+    std::fs::create_dir_all(&covers_dir)
+        .with_context(|| format!("creating covers dir {}", covers_dir.display()))?;
 
     let mut stats = ScanStats::default();
     let walker = WalkDir::new(&music_dir).follow_links(true).into_iter();
@@ -367,12 +366,17 @@ fn extract_metadata(path: &Path, filesize: i64, covers_dir: &Path) -> Result<Ext
     let content_type = mime_for_suffix(&suffix).to_string();
 
     let album_key = album_id_for(
-        if album_artist.is_empty() { &artist } else { &album_artist },
+        if album_artist.is_empty() {
+            &artist
+        } else {
+            &album_artist
+        },
         &album,
         year,
     );
 
-    let cover_filename = if let Some(pic) = primary_tag.and_then(|t| t.pictures().first().cloned()) {
+    let cover_filename = if let Some(pic) = primary_tag.and_then(|t| t.pictures().first().cloned())
+    {
         save_picture(covers_dir, &album_key, &pic).ok()
     } else {
         find_dir_cover(path, covers_dir, &album_key).ok().flatten()
