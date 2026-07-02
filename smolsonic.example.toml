@@ -39,4 +39,4 @@ scan_interval_secs = 300
 # (collaborators, band members). MusicBrainz requires a descriptive user
 # agent per their TOS — include app name, version, and contact info.
 # [musicbrainz]
-# user_agent = "smolsonic/0.6.3 ( you@example.com )"
+# user_agent = "smolsonic/0.7.0 ( you@example.com )"
