@@ -575,3 +575,43 @@ pub struct RemoteLyricInfoDto {
     pub provider_name: String,
     pub lyrics: LyricDto,
 }
+
+// ── RemoteImage ─────────────────────────────────────────────────────────────
+
+/// `RemoteImageInfo` — one candidate image returned by a metadata provider.
+/// Every field is nullable per spec; smolsonic populates `Url`, `Type`,
+/// `ProviderName`, and dimensions when the source reports them.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct RemoteImageInfo {
+    pub provider_name: Option<String>,
+    pub url: Option<String>,
+    pub thumbnail_url: Option<String>,
+    pub height: Option<i32>,
+    pub width: Option<i32>,
+    pub community_rating: Option<f64>,
+    pub vote_count: Option<i32>,
+    pub language: Option<String>,
+    /// `ImageType`: `Primary | Art | Backdrop | Banner | Logo | Thumb | Disc
+    /// | Box | Screenshot | Menu | Chapter | BoxRear | Profile`. smolsonic
+    /// only surfaces `Primary`.
+    #[serde(rename = "Type")]
+    pub image_type: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct RemoteImageResult {
+    pub images: Vec<RemoteImageInfo>,
+    pub total_record_count: i32,
+    pub providers: Vec<String>,
+}
+
+/// `ImageProviderInfo` — one entry in the response of
+/// `GET /Items/{id}/RemoteImages/Providers`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ImageProviderInfo {
+    pub name: String,
+    pub supported_images: Vec<&'static str>,
+}

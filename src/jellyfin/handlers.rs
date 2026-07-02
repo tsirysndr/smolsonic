@@ -2544,6 +2544,295 @@ pub async fn item_similar(
     }
 }
 
+// ── RemoteImage ─────────────────────────────────────────────────────────────
+//
+// Spec (Jellyfin OpenAPI, RemoteImage tag):
+//   GET  /Items/{id}/RemoteImages?type=&providerName=&startIndex=&limit=
+//        &includeAllLanguages=            → RemoteImageResult
+//   POST /Items/{id}/RemoteImages/Download?type=&imageUrl=  → 204
+//   GET  /Items/{id}/RemoteImages/Providers                 → [ImageProviderInfo]
+//
+// Sourced from the Last.fm + MusicBrainz plugins we already wired up for
+// Similar. Only `Primary` (cover art) is supported — smolsonic doesn't
+// model Art/Backdrop/Banner/etc. Requests for other types return an empty
+// image list on the search endpoint and 400 on Download.
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // `include_all_languages` is accepted per spec but not filtered on.
+pub struct RemoteImagesQuery {
+    #[serde(default, alias = "Type", rename = "type")]
+    pub image_type: Option<String>,
+    #[serde(default, alias = "StartIndex", rename = "startIndex")]
+    pub start_index: Option<i64>,
+    #[serde(default, alias = "Limit")]
+    pub limit: Option<i64>,
+    #[serde(default, alias = "ProviderName", rename = "providerName")]
+    pub provider_name: Option<String>,
+    #[serde(default, alias = "IncludeAllLanguages", rename = "includeAllLanguages")]
+    pub include_all_languages: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DownloadImageQuery {
+    #[serde(default, alias = "Type", rename = "type")]
+    pub image_type: Option<String>,
+    #[serde(default, alias = "ImageUrl", rename = "imageUrl")]
+    pub image_url: Option<String>,
+}
+
+fn is_primary(kind: Option<&str>) -> bool {
+    // Absent `type` → default to Primary (Findroid omits it on the initial
+    // rail render). Any other explicit value → not Primary.
+    match kind {
+        None => true,
+        Some(s) => s.eq_ignore_ascii_case("Primary"),
+    }
+}
+
+/// Resolve `item_guid` to (kind, native_id). For songs we hop up to the
+/// containing album because that's where the artwork actually lives.
+async fn remote_image_target(
+    state: &JellyfinState,
+    item_guid: &str,
+) -> Result<(String, crate::models::Album), HttpResponse> {
+    let g = mapping::normalize_guid(item_guid);
+    let Some((kind, native)) = resolve_native(state, &g).await else {
+        return Err(HttpResponse::NotFound().finish());
+    };
+    match kind.as_str() {
+        "album" => match repo::find_album(&state.pool, &native).await {
+            Ok(Some(a)) => Ok(("album".to_string(), a)),
+            _ => Err(HttpResponse::NotFound().finish()),
+        },
+        "song" => {
+            let Ok(Some(s)) = repo::find_song(&state.pool, &native).await else {
+                return Err(HttpResponse::NotFound().finish());
+            };
+            match repo::find_album(&state.pool, &s.album_id).await {
+                Ok(Some(a)) => Ok(("song".to_string(), a)),
+                _ => Err(HttpResponse::NotFound().finish()),
+            }
+        }
+        "artist" => Err(HttpResponse::NotFound().finish()),
+        _ => Err(HttpResponse::NotFound().finish()),
+    }
+}
+
+fn enabled_provider_names(state: &JellyfinState) -> Vec<String> {
+    let mut out = Vec::new();
+    if state.similar.lastfm.is_some() {
+        out.push("Last.fm".to_string());
+    }
+    if state.similar.musicbrainz.is_some() {
+        out.push("MusicBrainz".to_string());
+    }
+    out
+}
+
+pub async fn remote_images(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    query: web::Query<RemoteImagesQuery>,
+) -> HttpResponse {
+    let (_kind, album) = match remote_image_target(&state, &path.into_inner()).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let q = query.into_inner();
+    let providers_available = enabled_provider_names(&state);
+
+    // Non-Primary type → the query is well-formed but we have nothing.
+    if !is_primary(q.image_type.as_deref()) {
+        return HttpResponse::Ok().json(super::dto::RemoteImageResult {
+            images: vec![],
+            total_record_count: 0,
+            providers: providers_available,
+        });
+    }
+
+    let mut images: Vec<super::dto::RemoteImageInfo> = Vec::new();
+    let want_lastfm = matches_provider(&q.provider_name, "Last.fm");
+    let want_mb = matches_provider(&q.provider_name, "MusicBrainz");
+
+    if want_lastfm {
+        if let Some(lf) = &state.similar.lastfm {
+            match lf
+                .album_image_urls_cached(&state.pool, &album.id, &album.artist, &album.title)
+                .await
+            {
+                Ok(urls) => {
+                    for url in urls {
+                        images.push(super::dto::RemoteImageInfo {
+                            provider_name: Some("Last.fm".to_string()),
+                            url: Some(url),
+                            thumbnail_url: None,
+                            height: None,
+                            width: None,
+                            community_rating: None,
+                            vote_count: None,
+                            language: Some("en".to_string()),
+                            image_type: "Primary",
+                        });
+                    }
+                }
+                Err(e) => tracing::warn!("lastfm album.getInfo({}): {e}", album.title),
+            }
+        }
+    }
+    if want_mb {
+        if let Some(mb) = &state.similar.musicbrainz {
+            match mb
+                .album_image_urls_cached(&state.pool, &album.id, &album.artist, &album.title)
+                .await
+            {
+                Ok(urls) => {
+                    for url in urls {
+                        images.push(super::dto::RemoteImageInfo {
+                            provider_name: Some("MusicBrainz".to_string()),
+                            url: Some(url),
+                            thumbnail_url: None,
+                            height: None,
+                            width: None,
+                            community_rating: None,
+                            vote_count: None,
+                            language: None,
+                            image_type: "Primary",
+                        });
+                    }
+                }
+                Err(e) => tracing::warn!("mb coverart({}): {e}", album.title),
+            }
+        }
+    }
+
+    // Honour StartIndex / Limit.
+    let start = q.start_index.unwrap_or(0).max(0) as usize;
+    let take = q.limit.map(|n| n.max(1) as usize).unwrap_or(usize::MAX);
+    let total = images.len() as i32;
+    let sliced: Vec<super::dto::RemoteImageInfo> =
+        images.into_iter().skip(start).take(take).collect();
+    HttpResponse::Ok().json(super::dto::RemoteImageResult {
+        images: sliced,
+        total_record_count: total,
+        providers: providers_available,
+    })
+}
+
+fn matches_provider(requested: &Option<String>, provider: &str) -> bool {
+    match requested {
+        None => true,
+        Some(s) => s.eq_ignore_ascii_case(provider),
+    }
+}
+
+pub async fn remote_image_providers(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    // Still 404 on unknown items — real Jellyfin behaves the same.
+    let g = mapping::normalize_guid(&path.into_inner());
+    if resolve_native(&state, &g).await.is_none() {
+        return HttpResponse::NotFound().finish();
+    }
+    let list: Vec<super::dto::ImageProviderInfo> = enabled_provider_names(&state)
+        .into_iter()
+        .map(|name| super::dto::ImageProviderInfo {
+            name,
+            supported_images: vec!["Primary"],
+        })
+        .collect();
+    HttpResponse::Ok().json(list)
+}
+
+pub async fn download_remote_image(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    query: web::Query<DownloadImageQuery>,
+) -> HttpResponse {
+    let (_kind, album) = match remote_image_target(&state, &path.into_inner()).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let q = query.into_inner();
+    if !is_primary(q.image_type.as_deref()) {
+        return HttpResponse::BadRequest().body("only Primary image type is supported");
+    }
+    let Some(image_url) = q.image_url.filter(|u| u.starts_with("http")) else {
+        return HttpResponse::BadRequest().body("imageUrl query parameter is required");
+    };
+    if state.similar.lastfm.is_none() && state.similar.musicbrainz.is_none() {
+        return HttpResponse::BadRequest()
+            .body("no image plugin enabled; configure [lastfm] or [musicbrainz]");
+    }
+
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build();
+    let http = match http {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("build http client: {e}");
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+    let resp = match http.get(&image_url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("download {image_url}: {e}");
+            return HttpResponse::BadGateway().finish();
+        }
+    };
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("image/jpeg")
+        .to_string();
+    let bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!("read image bytes: {e}");
+            return HttpResponse::BadGateway().finish();
+        }
+    };
+    let ext = ext_for_content_type(&content_type);
+    let filename = format!("remote-{}.{ext}", album.id);
+    let dst = state.covers_dir.join(&filename);
+    if let Err(e) = std::fs::create_dir_all(&state.covers_dir) {
+        tracing::error!("create covers_dir {}: {e}", state.covers_dir.display());
+        return HttpResponse::InternalServerError().finish();
+    }
+    if let Err(e) = std::fs::write(&dst, &bytes) {
+        tracing::error!("write cover {}: {e}", dst.display());
+        return HttpResponse::InternalServerError().finish();
+    }
+    if let Err(e) = repo::set_album_cover_art(&state.pool, &album.id, &filename).await {
+        tracing::error!("set_album_cover_art({}): {e}", album.id);
+        return HttpResponse::InternalServerError().finish();
+    }
+    HttpResponse::NoContent().finish()
+}
+
+/// Naive content-type → extension. Falls back to `jpg` for anything unknown
+/// because Cover Art Archive returns JPEG for `/front-*` by default.
+fn ext_for_content_type(ct: &str) -> &'static str {
+    let ct_lower = ct.to_ascii_lowercase();
+    if ct_lower.starts_with("image/png") {
+        "png"
+    } else if ct_lower.starts_with("image/webp") {
+        "webp"
+    } else if ct_lower.starts_with("image/gif") {
+        "gif"
+    } else if ct_lower.starts_with("image/svg") {
+        "svg"
+    } else {
+        "jpg"
+    }
+}
+
 // ── Images ───────────────────────────────────────────────────────────────────
 
 fn cover_path_for(state: &JellyfinState, filename: &str) -> PathBuf {

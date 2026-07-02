@@ -194,6 +194,139 @@ impl LastfmClient {
             .await?;
         Ok(parse_lastfm_names(&resp))
     }
+
+    /// Look up cover-art URLs for an album via `album.getInfo`. Note that
+    /// Last.fm's response usually contains empty image strings post-2018
+    /// (licensing), but we still call it so we surface whatever it returns
+    /// alongside MusicBrainz. Cached under the "lastfm-album-image" tag.
+    pub async fn album_image_urls_cached(
+        &self,
+        pool: &Db,
+        album_native_id: &str,
+        artist: &str,
+        album: &str,
+    ) -> Result<Vec<String>> {
+        if let Some(cached) = cache_get(pool, album_native_id, "lastfm-album-image").await? {
+            return Ok(cached);
+        }
+        let urls = self.fetch_album_images(artist, album).await?;
+        cache_put(pool, album_native_id, "lastfm-album-image", &urls).await?;
+        Ok(urls)
+    }
+
+    async fn fetch_album_images(&self, artist: &str, album: &str) -> Result<Vec<String>> {
+        let resp: LastfmAlbumInfoResponse = self
+            .http
+            .get("http://ws.audioscrobbler.com/2.0/")
+            .query(&[
+                ("method", "album.getinfo"),
+                ("artist", artist),
+                ("album", album),
+                ("autocorrect", "1"),
+                ("api_key", self.api_key.as_str()),
+                ("format", "json"),
+            ])
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(parse_lastfm_album_images(&resp))
+    }
+
+    /// `artist.getInfo` → image URLs. Same 2018-licensing caveat as
+    /// `album.getInfo` — expect mostly empty responses.
+    pub async fn artist_image_urls_cached(
+        &self,
+        pool: &Db,
+        artist_native_id: &str,
+        artist: &str,
+    ) -> Result<Vec<String>> {
+        if let Some(cached) = cache_get(pool, artist_native_id, "lastfm-artist-image").await? {
+            return Ok(cached);
+        }
+        let urls = self.fetch_artist_images(artist).await?;
+        cache_put(pool, artist_native_id, "lastfm-artist-image", &urls).await?;
+        Ok(urls)
+    }
+
+    async fn fetch_artist_images(&self, artist: &str) -> Result<Vec<String>> {
+        let resp: LastfmArtistInfoResponse = self
+            .http
+            .get("http://ws.audioscrobbler.com/2.0/")
+            .query(&[
+                ("method", "artist.getinfo"),
+                ("artist", artist),
+                ("autocorrect", "1"),
+                ("api_key", self.api_key.as_str()),
+                ("format", "json"),
+            ])
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(parse_lastfm_artist_images(&resp))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct LastfmAlbumInfoResponse {
+    #[serde(default)]
+    album: Option<LastfmAlbumInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LastfmAlbumInfo {
+    #[serde(default, rename = "image")]
+    images: Vec<LastfmImage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LastfmArtistInfoResponse {
+    #[serde(default)]
+    artist: Option<LastfmArtistInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LastfmArtistInfo {
+    #[serde(default, rename = "image")]
+    images: Vec<LastfmImage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LastfmImage {
+    #[serde(default, rename = "#text")]
+    url: String,
+    #[serde(default)]
+    #[allow(dead_code)] // useful for callers that want to pick a preferred size
+    size: String,
+}
+
+fn parse_lastfm_album_images(resp: &LastfmAlbumInfoResponse) -> Vec<String> {
+    resp.album
+        .as_ref()
+        .map(|a| {
+            a.images
+                .iter()
+                .map(|i| i.url.clone())
+                .filter(|u| !u.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_lastfm_artist_images(resp: &LastfmArtistInfoResponse) -> Vec<String> {
+    resp.artist
+        .as_ref()
+        .map(|a| {
+            a.images
+                .iter()
+                .map(|i| i.url.clone())
+                .filter(|u| !u.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -274,6 +407,67 @@ impl MusicBrainzClient {
         *guard = Some(std::time::Instant::now());
     }
 
+    /// Cover Art Archive lookup for an album. Two-step: search for a
+    /// release MBID by artist+album name, then `GET
+    /// https://coverartarchive.org/release/{mbid}` for the CAA JSON.
+    /// Cached under "mb-album-image".
+    pub async fn album_image_urls_cached(
+        &self,
+        pool: &Db,
+        album_native_id: &str,
+        artist: &str,
+        album: &str,
+    ) -> Result<Vec<String>> {
+        if let Some(cached) = cache_get(pool, album_native_id, "mb-album-image").await? {
+            return Ok(cached);
+        }
+        let urls = self
+            .fetch_coverart_urls(artist, album)
+            .await
+            .unwrap_or_default();
+        cache_put(pool, album_native_id, "mb-album-image", &urls).await?;
+        Ok(urls)
+    }
+
+    async fn fetch_coverart_urls(&self, artist: &str, album: &str) -> Result<Vec<String>> {
+        self.wait_for_slot().await;
+        let search: MbReleaseSearchResponse = self
+            .http
+            .get("https://musicbrainz.org/ws/2/release")
+            .header("User-Agent", &self.user_agent)
+            .header("Accept", "application/json")
+            .query(&[
+                (
+                    "query",
+                    format!("release:\"{album}\" AND artist:\"{artist}\"").as_str(),
+                ),
+                ("limit", "1"),
+            ])
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let Some(mbid) = search.releases.first().map(|r| r.id.clone()) else {
+            return Ok(Vec::new());
+        };
+
+        // Cover Art Archive is a separate host (no MB rate limiter needed),
+        // but we still keep the interval as a courtesy — it's the same
+        // upstream infrastructure.
+        self.wait_for_slot().await;
+        let caa: CoverArtArchiveResponse = self
+            .http
+            .get(format!("https://coverartarchive.org/release/{mbid}"))
+            .header("User-Agent", &self.user_agent)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(parse_caa_urls(&caa))
+    }
+
     async fn fetch_linked(&self, seed_name: &str) -> Result<Vec<String>> {
         // Step 1: resolve name → MBID via the search index.
         self.wait_for_slot().await;
@@ -350,6 +544,85 @@ fn parse_mb_linked(resp: &MbArtistResponse) -> Vec<String> {
         .collect()
 }
 
+#[derive(Debug, Deserialize)]
+struct MbReleaseSearchResponse {
+    #[serde(default)]
+    releases: Vec<MbRelease>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MbRelease {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CoverArtArchiveResponse {
+    #[serde(default)]
+    images: Vec<CoverArtImage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CoverArtImage {
+    #[serde(default)]
+    image: String,
+    #[serde(default)]
+    thumbnails: Option<CoverArtThumbnails>,
+    #[serde(default)]
+    front: bool,
+    #[serde(default)]
+    approved: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct CoverArtThumbnails {
+    #[serde(default, rename = "500")]
+    #[allow(dead_code)]
+    medium: Option<String>,
+    #[serde(default, rename = "1200")]
+    #[allow(dead_code)]
+    large: Option<String>,
+}
+
+fn parse_caa_urls(resp: &CoverArtArchiveResponse) -> Vec<String> {
+    // Prefer approved front covers; fall back to any front cover; fall back
+    // to any image. Emit the full-size `image` URL — CAA serves a redirect
+    // to the actual bytes when downloaded.
+    let mut out: Vec<String> = Vec::new();
+    for i in &resp.images {
+        if !i.approved || !i.front {
+            continue;
+        }
+        if !i.image.is_empty() {
+            out.push(i.image.clone());
+        }
+    }
+    if out.is_empty() {
+        for i in &resp.images {
+            if !i.front {
+                continue;
+            }
+            if !i.image.is_empty() {
+                out.push(i.image.clone());
+            }
+        }
+    }
+    if out.is_empty() {
+        for i in &resp.images {
+            if !i.image.is_empty() {
+                out.push(i.image.clone());
+            }
+        }
+    }
+    // Silence unused-field warning on CoverArtThumbnails when out already
+    // has content — keep the type available for future callers.
+    let _ = resp
+        .images
+        .iter()
+        .filter_map(|i| i.thumbnails.as_ref())
+        .count();
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,6 +662,54 @@ mod tests {
         let resp: MbArtistResponse = serde_json::from_str(payload).unwrap();
         let names = parse_mb_linked(&resp);
         assert_eq!(names, vec!["Guest Artist", "Band Member"]);
+    }
+
+    #[test]
+    fn parses_lastfm_album_getinfo_images() {
+        // r##"..."## because the JSON payload contains `"#text"` — a naked
+        // `r#"..."#` would terminate at the first inner `"#`.
+        let payload = r##"{
+            "album": {
+                "image": [
+                    {"#text": "https://example/small.png", "size": "small"},
+                    {"#text": "https://example/large.png", "size": "large"},
+                    {"#text": "", "size": "mega"}
+                ]
+            }
+        }"##;
+        let resp: LastfmAlbumInfoResponse = serde_json::from_str(payload).unwrap();
+        let urls = parse_lastfm_album_images(&resp);
+        assert_eq!(
+            urls,
+            vec!["https://example/small.png", "https://example/large.png"]
+        );
+    }
+
+    #[test]
+    fn parses_caa_prefers_approved_front_covers() {
+        let payload = r#"{
+            "images": [
+                {"image": "https://caa/front-approved.jpg", "front": true, "approved": true},
+                {"image": "https://caa/front-pending.jpg", "front": true, "approved": false},
+                {"image": "https://caa/back.jpg", "front": false, "approved": true}
+            ]
+        }"#;
+        let resp: CoverArtArchiveResponse = serde_json::from_str(payload).unwrap();
+        let urls = parse_caa_urls(&resp);
+        assert_eq!(urls, vec!["https://caa/front-approved.jpg"]);
+    }
+
+    #[test]
+    fn parses_caa_falls_back_when_no_approved_front() {
+        let payload = r#"{
+            "images": [
+                {"image": "https://caa/pending.jpg", "front": true, "approved": false},
+                {"image": "https://caa/back.jpg", "front": false, "approved": true}
+            ]
+        }"#;
+        let resp: CoverArtArchiveResponse = serde_json::from_str(payload).unwrap();
+        let urls = parse_caa_urls(&resp);
+        assert_eq!(urls, vec!["https://caa/pending.jpg"]);
     }
 
     #[tokio::test]

@@ -383,6 +383,18 @@ pub async fn find_album(pool: &Db, id: &str) -> Result<Option<Album>> {
     Ok(row)
 }
 
+/// Set `albums.cover_art` to `filename` (a bare filename inside covers_dir,
+/// not a path). Used by `POST /Items/{id}/RemoteImages/Download` after we
+/// persist the downloaded bytes.
+pub async fn set_album_cover_art(pool: &Db, album_id: &str, filename: &str) -> Result<()> {
+    sqlx::query("UPDATE albums SET cover_art = ?1 WHERE id = ?2")
+        .bind(filename)
+        .bind(album_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn all_songs_paginated(pool: &Db, limit: i64, offset: i64) -> Result<Vec<Song>> {
     let rows = sqlx::query_as::<_, Song>(
         "SELECT id, path, title, artist, artist_id, album, album_id, genre, track_number,

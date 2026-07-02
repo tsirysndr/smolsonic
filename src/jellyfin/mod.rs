@@ -228,6 +228,23 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             "/Items/{id}/InstantMix",
             web::get().to(handlers::item_instant_mix),
         )
+        // RemoteImage — modelled after the Jellyfin OpenAPI RemoteImage tag.
+        // Powered by the Last.fm / MusicBrainz plugins; empty when neither
+        // is enabled. `/RemoteImages/Providers` and `/Download` must
+        // precede the plain `/RemoteImages` so actix binds the longer
+        // paths first.
+        .route(
+            "/Items/{id}/RemoteImages/Providers",
+            web::get().to(handlers::remote_image_providers),
+        )
+        .route(
+            "/Items/{id}/RemoteImages/Download",
+            web::post().to(handlers::download_remote_image),
+        )
+        .route(
+            "/Items/{id}/RemoteImages",
+            web::get().to(handlers::remote_images),
+        )
         .route("/Items/{id}", web::get().to(handlers::item_by_id))
         // DELETE /Items/{id} — Jellyfin uses this to delete playlists (they
         // are `BaseItem`s). Songs/albums are read-only in smolsonic and get
@@ -2168,5 +2185,134 @@ mod tests {
                 "expected 404 for {uri}"
             );
         }
+    }
+
+    /// RemoteImage API — with neither Last.fm nor MusicBrainz configured,
+    /// the search returns empty images + empty providers, Providers
+    /// returns [], Download rejects with 400, and unknown GUIDs 404.
+    #[actix_web::test]
+    async fn remote_images_returns_empty_when_no_plugin_tokens_configured() {
+        let dir = tempdir();
+        let state = fixture_state(&dir, &dir, false).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(configure_routes),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/Users/AuthenticateByName")
+            .insert_header((
+                "X-Emby-Authorization",
+                r#"MediaBrowser Client="t", Device="d", DeviceId="i", Version="v""#,
+            ))
+            .set_json(serde_json::json!({"Username":"alice","Pw":"secret"}))
+            .to_request();
+        let auth_body: Value = test::call_and_read_body_json(&app, req).await;
+        let token = auth_body["AccessToken"].as_str().unwrap().to_string();
+
+        // Discover the album GUID.
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=MusicAlbum")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let albums: Value = test::call_and_read_body_json(&app, req).await;
+        let album_id = albums["Items"][0]["Id"].as_str().unwrap().to_string();
+
+        // GET /RemoteImages — no plugins → empty images + empty providers.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Items/{album_id}/RemoteImages"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["TotalRecordCount"], 0);
+        assert!(body["Images"].as_array().unwrap().is_empty());
+        assert!(body["Providers"].as_array().unwrap().is_empty());
+
+        // GET /RemoteImages/Providers — no plugins → empty list.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Items/{album_id}/RemoteImages/Providers"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert!(body.as_array().unwrap().is_empty());
+
+        // POST Download without imageUrl → 400.
+        let req = test::TestRequest::post()
+            .uri(&format!(
+                "/Items/{album_id}/RemoteImages/Download?type=Primary"
+            ))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        // POST Download with non-Primary type → 400.
+        let req = test::TestRequest::post()
+            .uri(&format!(
+                "/Items/{album_id}/RemoteImages/Download?type=Backdrop&imageUrl=http://x"
+            ))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        // POST Download with plugins disabled but otherwise valid → 400.
+        let req = test::TestRequest::post()
+            .uri(&format!(
+                "/Items/{album_id}/RemoteImages/Download?type=Primary&imageUrl=https://example/x.jpg"
+            ))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        // Requesting a non-Primary type on search → empty images, no error.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Items/{album_id}/RemoteImages?type=Backdrop"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["TotalRecordCount"], 0);
+
+        // Unknown GUID → 404 across the trio.
+        let bogus = "00000000-0000-0000-0000-000000000000";
+        for uri in [
+            format!("/Items/{bogus}/RemoteImages"),
+            format!("/Items/{bogus}/RemoteImages/Providers"),
+        ] {
+            let req = test::TestRequest::get()
+                .uri(&uri)
+                .insert_header(("X-Emby-Token", token.clone()))
+                .to_request();
+            assert_eq!(
+                test::call_service(&app, req).await.status(),
+                StatusCode::NOT_FOUND,
+                "expected 404 for {uri}"
+            );
+        }
+
+        // Artist GUID → RemoteImages 404 (only album + song supported).
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=MusicArtist")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let artists: Value = test::call_and_read_body_json(&app, req).await;
+        let artist_id = artists["Items"][0]["Id"].as_str().unwrap().to_string();
+        let req = test::TestRequest::get()
+            .uri(&format!("/Items/{artist_id}/RemoteImages"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NOT_FOUND
+        );
     }
 }
