@@ -891,6 +891,44 @@ pub struct UserItemData {
     pub likes: Option<bool>,
 }
 
+/// Songs whose playback is in progress — `playback_position_ticks > 0` and
+/// not (yet) marked played. Ordered by `last_played_date DESC` so the most
+/// recently seeked item lands first. Powers the home-screen "Resume" rail.
+pub async fn resume_songs(pool: &Db, limit: i64) -> Result<Vec<Song>> {
+    let rows = sqlx::query_as::<_, Song>(
+        "SELECT s.id, s.path, s.title, s.artist, s.artist_id, s.album, s.album_id, s.genre,
+                s.track_number, s.disc_number, s.year, s.duration_ms, s.bitrate, s.filesize,
+                s.suffix, s.content_type, s.cover_art
+         FROM songs s
+         INNER JOIN user_item_data u ON u.id = s.id
+         WHERE u.playback_position_ticks > 0 AND u.played = 0
+         ORDER BY COALESCE(u.last_played_date, '') DESC
+         LIMIT ?1",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Same for videos. Movies are the natural "Resume" candidate on the video
+/// library home screen.
+pub async fn resume_videos(pool: &Db, limit: i64) -> Result<Vec<Video>> {
+    let rows = sqlx::query_as::<_, Video>(
+        "SELECT v.id, v.path, v.title, v.container, v.duration_ms, v.filesize, v.bitrate,
+                v.width, v.height, v.poster_path
+         FROM videos v
+         INNER JOIN user_item_data u ON u.id = v.id
+         WHERE u.playback_position_ticks > 0 AND u.played = 0
+         ORDER BY COALESCE(u.last_played_date, '') DESC
+         LIMIT ?1",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub async fn get_user_item_data(pool: &Db, native_id: &str) -> Result<UserItemData> {
     let row: Option<(i64, i64, i64, Option<String>, Option<f64>, Option<i64>)> = sqlx::query_as(
         "SELECT played, play_count, playback_position_ticks, last_played_date, rating, likes

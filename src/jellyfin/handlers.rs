@@ -4162,7 +4162,10 @@ pub async fn items_latest(
     state: web::Data<JellyfinState>,
     req: HttpRequest,
 ) -> HttpResponse {
-    let q = parse_items_query(&req);
+    items_latest_impl(state, parse_items_query(&req)).await
+}
+
+async fn items_latest_impl(state: web::Data<JellyfinState>, q: ItemsQuery) -> HttpResponse {
     let limit = q.limit.unwrap_or(16).max(1);
 
     if let Some(parent) = q.parent_id.as_ref() {
@@ -4214,6 +4217,135 @@ pub async fn empty_items() -> HttpResponse {
     HttpResponse::Ok().json(ItemsResult {
         items: vec![],
         total_record_count: 0,
+        start_index: 0,
+    })
+}
+
+/// `/Users/{uid}/Views/{view}/Latest` — legacy per-library latest rail.
+/// The view id lives in the path here (not the query), so we override
+/// `parent_id` on the parsed query and delegate to `items_latest`'s logic.
+pub async fn view_latest(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<(String, String)>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let (_uid, view) = path.into_inner();
+    let mut q = parse_items_query(&req);
+    q.parent_id = Some(view);
+    items_latest_impl(state, q).await
+}
+
+/// `/Items/Resume`, `/UserItems/Resume`, `/Users/{uid}/Items/Resume` —
+/// items with a non-zero playback position, ordered by most-recently
+/// played. Returned as a `BaseItemDtoQueryResult` per spec (not a bare
+/// array like Latest).
+pub async fn items_resume(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let q = parse_items_query(&req);
+    let limit = q.limit.unwrap_or(12).max(1);
+
+    // Movies-library parent → resume videos; music parent (or no parent) →
+    // resume songs. `?mediaTypes=Video` also asks for videos.
+    let want_videos = q
+        .parent_id
+        .as_deref()
+        .map(mapping::normalize_guid)
+        .map(|g| g == mapping::movies_library_guid())
+        .unwrap_or(false)
+        || includes(&q.media_types, "Video");
+
+    if want_videos {
+        let videos = repo::resume_videos(&state.pool, limit)
+            .await
+            .unwrap_or_default();
+        let mut dtos = Vec::with_capacity(videos.len());
+        for v in &videos {
+            dtos.push(video_to_dto(&state, v).await);
+        }
+        let total = dtos.len() as i32;
+        return HttpResponse::Ok().json(ItemsResult {
+            items: dtos,
+            total_record_count: total,
+            start_index: 0,
+        });
+    }
+
+    let songs = repo::resume_songs(&state.pool, limit)
+        .await
+        .unwrap_or_default();
+    let mut dtos = Vec::with_capacity(songs.len());
+    for s in &songs {
+        dtos.push(song_to_dto(&state, s).await);
+    }
+    let total = dtos.len() as i32;
+    HttpResponse::Ok().json(ItemsResult {
+        items: dtos,
+        total_record_count: total,
+        start_index: 0,
+    })
+}
+
+/// `/Items/Suggestions`, `/Users/{uid}/Items/Suggestions` — spec-defined
+/// "you might like" rail. Returns random albums by default (or songs when
+/// `?type=Audio` / `?mediaType=Audio`, or movies when `?type=Movie`).
+pub async fn items_suggestions(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let q = parse_items_query(&req);
+    let limit = q.limit.unwrap_or(12).max(1);
+
+    if includes(&q.include_item_types, "Audio") || includes(&q.media_types, "Audio") {
+        let songs = repo::random_songs(&state.pool, limit, None, None, None)
+            .await
+            .unwrap_or_default();
+        let mut dtos = Vec::with_capacity(songs.len());
+        for s in &songs {
+            dtos.push(song_to_dto(&state, s).await);
+        }
+        let total = dtos.len() as i32;
+        return HttpResponse::Ok().json(ItemsResult {
+            items: dtos,
+            total_record_count: total,
+            start_index: 0,
+        });
+    }
+    if wants_videos(&q) {
+        // Use the same "random" approximation as MusicAlbum below — all_videos
+        // is ordered by title but that's better than nothing.
+        let videos = repo::all_videos(&state.pool, limit, 0)
+            .await
+            .unwrap_or_default();
+        let mut dtos = Vec::with_capacity(videos.len());
+        for v in &videos {
+            dtos.push(video_to_dto(&state, v).await);
+        }
+        let total = dtos.len() as i32;
+        return HttpResponse::Ok().json(ItemsResult {
+            items: dtos,
+            total_record_count: total,
+            start_index: 0,
+        });
+    }
+
+    // Default → random albums. Reuse `albums_paginated("random", …)` which
+    // ORDER BY RANDOM()s the table.
+    let albums = repo::albums_paginated(&state.pool, "random", limit, 0)
+        .await
+        .unwrap_or_default();
+    let mut dtos = Vec::with_capacity(albums.len());
+    for a in &albums {
+        dtos.push(album_to_dto(&state, a).await);
+    }
+    let total = dtos.len() as i32;
+    HttpResponse::Ok().json(ItemsResult {
+        items: dtos,
+        total_record_count: total,
         start_index: 0,
     })
 }

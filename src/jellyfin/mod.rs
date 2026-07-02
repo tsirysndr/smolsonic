@@ -179,8 +179,11 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         // Items — specific paths MUST be registered before /Items/{id}
         // because actix matches in registration order.
         .route("/Items", web::get().to(handlers::items))
-        .route("/Items/Suggestions", web::get().to(handlers::empty_items))
-        .route("/Items/Resume", web::get().to(handlers::empty_items))
+        .route(
+            "/Items/Suggestions",
+            web::get().to(handlers::items_suggestions),
+        )
+        .route("/Items/Resume", web::get().to(handlers::items_resume))
         .route("/Items/Latest", web::get().to(handlers::items_latest))
         .route("/Items/Prefixes", web::get().to(handlers::items_prefixes))
         // Movie-detail rails Moonfin probes. We have no extras / similar /
@@ -259,19 +262,19 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .route("/Users/{id}/Items", web::get().to(handlers::user_items))
         .route(
             "/Users/{id}/Items/Resume",
-            web::get().to(handlers::empty_items),
+            web::get().to(handlers::items_resume),
         )
         .route(
             "/Users/{id}/Items/Latest",
-            web::get().to(handlers::empty_array),
+            web::get().to(handlers::items_latest),
         )
         .route(
             "/Users/{uid}/Items/{id}",
             web::get().to(handlers::user_item_by_id),
         )
         // Legacy /UserItems/* aliases — Findroid hits these for the home rails.
-        .route("/UserItems/Resume", web::get().to(handlers::empty_items))
-        .route("/UserItems/Latest", web::get().to(handlers::empty_array))
+        .route("/UserItems/Resume", web::get().to(handlers::items_resume))
+        .route("/UserItems/Latest", web::get().to(handlers::items_latest))
         // /UserViews?userId=... — Findroid uses this instead of /Users/{id}/Views.
         .route("/UserViews", web::get().to(handlers::user_views_query))
         // Search endpoints — backed by the existing FTS in repo.rs.
@@ -585,11 +588,13 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         )
         .route(
             "/Users/{id}/Items/Suggestions",
-            web::get().to(handlers::empty_items),
+            web::get().to(handlers::items_suggestions),
         )
+        // Per-library latest: `/Users/{uid}/Views/{view}/Latest` — the
+        // view id lives in the path; view_latest merges it into the query.
         .route(
             "/Users/{id}/Views/{view}/Latest",
-            web::get().to(handlers::empty_array),
+            web::get().to(handlers::view_latest),
         )
         // Genre + MusicGenre — modelled after the Jellyfin OpenAPI Genre /
         // MusicGenre tags. Genres are derived from `songs.genre`; smolsonic
@@ -2734,5 +2739,130 @@ mod tests {
         assert!(body["Overview"].is_null());
         assert!(body["Tags"].is_null());
         assert!(body["ExternalUrls"].is_null());
+    }
+
+    /// Home-rail endpoints: /Items/Suggestions returns items when the library
+    /// has any; /Items/Resume tracks positions from user_item_data;
+    /// /UserItems/Latest and the legacy per-user aliases share the handler.
+    #[actix_web::test]
+    async fn home_rails_suggestions_resume_and_latest() {
+        let dir = tempdir();
+        let state = fixture_state(&dir, &dir, false).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(configure_routes),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/Users/AuthenticateByName")
+            .insert_header((
+                "X-Emby-Authorization",
+                r#"MediaBrowser Client="t", Device="d", DeviceId="i", Version="v""#,
+            ))
+            .set_json(serde_json::json!({"Username":"alice","Pw":"secret"}))
+            .to_request();
+        let auth_body: Value = test::call_and_read_body_json(&app, req).await;
+        let token = auth_body["AccessToken"].as_str().unwrap().to_string();
+        let user_id = auth_body["User"]["Id"].as_str().unwrap().to_string();
+
+        // Suggestions default → random album — fixture has 1, so we get 1.
+        let req = test::TestRequest::get()
+            .uri("/Items/Suggestions?limit=5")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["TotalRecordCount"], 1);
+        assert_eq!(body["Items"][0]["Type"], "MusicAlbum");
+
+        // Suggestions?type=Audio → songs.
+        let req = test::TestRequest::get()
+            .uri("/Items/Suggestions?IncludeItemTypes=Audio&limit=5")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["TotalRecordCount"], 1);
+        assert_eq!(body["Items"][0]["Type"], "Audio");
+
+        // Resume empty initially (no user_item_data rows with position > 0).
+        let req = test::TestRequest::get()
+            .uri("/Items/Resume")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["TotalRecordCount"], 0);
+
+        // POST UserData with PlaybackPositionTicks > 0 → Resume picks it up.
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=Audio")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let songs: Value = test::call_and_read_body_json(&app, req).await;
+        let song_id = songs["Items"][0]["Id"].as_str().unwrap().to_string();
+        let req = test::TestRequest::post()
+            .uri(&format!("/UserItems/{song_id}/UserData"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .set_json(serde_json::json!({
+                "PlaybackPositionTicks": 12_345_678_i64,
+            }))
+            .to_request();
+        assert_eq!(test::call_service(&app, req).await.status(), StatusCode::OK);
+        // Resume now returns the song.
+        let req = test::TestRequest::get()
+            .uri("/Items/Resume")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["TotalRecordCount"], 1);
+        assert_eq!(body["Items"][0]["Id"], song_id);
+        // Legacy /UserItems/Resume and per-user /Users/{uid}/Items/Resume
+        // share the handler.
+        for uri in [
+            "/UserItems/Resume".to_string(),
+            format!("/Users/{user_id}/Items/Resume"),
+        ] {
+            let req = test::TestRequest::get()
+                .uri(&uri)
+                .insert_header(("X-Emby-Token", token.clone()))
+                .to_request();
+            let body: Value = test::call_and_read_body_json(&app, req).await;
+            assert_eq!(body["TotalRecordCount"], 1, "{uri}");
+        }
+
+        // Marking the item played clears it from Resume (played=1 filter).
+        let req = test::TestRequest::post()
+            .uri(&format!("/UserPlayedItems/{song_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        assert_eq!(test::call_service(&app, req).await.status(), StatusCode::OK);
+        let req = test::TestRequest::get()
+            .uri("/Items/Resume")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["TotalRecordCount"], 0);
+
+        // /UserItems/Latest wraps items_latest — with a music-library parent
+        // it returns recently added albums (or empty when parent unset since
+        // the plain array shape is right).
+        let library = mapping::library_guid();
+        let req = test::TestRequest::get()
+            .uri(&format!("/Users/{user_id}/Items/Latest?parentId={library}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert!(body.is_array());
+        assert_eq!(body.as_array().unwrap().len(), 1);
+        assert_eq!(body[0]["Type"], "MusicAlbum");
+
+        // /Users/{uid}/Views/{view}/Latest — view id in the PATH, no query.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Users/{user_id}/Views/{library}/Latest"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert!(body.is_array());
+        assert_eq!(body.as_array().unwrap().len(), 1);
+        assert_eq!(body[0]["Type"], "MusicAlbum");
     }
 }
