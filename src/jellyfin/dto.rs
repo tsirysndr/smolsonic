@@ -316,6 +316,29 @@ pub struct UserItemDataDto {
     pub item_id: String,
 }
 
+/// Request body for `POST /UserItems/{itemId}/UserData`. Every field is
+/// nullable per spec — clients typically send only the fields they want to
+/// change, so we accept missing keys the same as explicit `null`.
+///
+/// Deserializes with case-insensitive fields (`PlaybackPositionTicks` and
+/// `playbackPositionTicks` both work) to match the spec's dual
+/// PascalCase/camelCase profiles.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, rename_all = "PascalCase")]
+pub struct UpdateUserItemDataDto {
+    pub rating: Option<f64>,
+    pub played_percentage: Option<f64>,
+    pub unplayed_item_count: Option<i32>,
+    pub playback_position_ticks: Option<i64>,
+    pub play_count: Option<i32>,
+    pub is_favorite: Option<bool>,
+    pub likes: Option<bool>,
+    pub last_played_date: Option<String>,
+    pub played: Option<bool>,
+    pub key: Option<String>,
+    pub item_id: Option<String>,
+}
+
 #[derive(Debug, Serialize, Default, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct ImageBlurHashes {}

@@ -341,13 +341,57 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             "/Sessions/Playing/Stopped",
             web::post().to(handlers::sessions_playing_stopped),
         )
+        // UserData / PlayedItems / Rating — modelled after the Jellyfin
+        // OpenAPI UserLibrary tag. Spec forms use no {userId} (smolsonic is
+        // single-user); legacy per-user forms are registered because older
+        // clients (Symfonium, Finamp <=1.9) still hit them.
         .route(
-            "/Users/{uid}/PlayedItems/{id}",
-            web::post().to(handlers::user_played_item),
+            "/UserItems/{id}/UserData",
+            web::get().to(handlers::get_user_item_data_endpoint),
+        )
+        .route(
+            "/UserItems/{id}/UserData",
+            web::post().to(handlers::update_user_item_data_endpoint),
+        )
+        .route(
+            "/Users/{uid}/Items/{id}/UserData",
+            web::get().to(handlers::get_user_item_data_legacy),
+        )
+        .route(
+            "/Users/{uid}/Items/{id}/UserData",
+            web::post().to(handlers::update_user_item_data_legacy),
+        )
+        .route(
+            "/UserPlayedItems/{id}",
+            web::post().to(handlers::mark_played_endpoint),
+        )
+        .route(
+            "/UserPlayedItems/{id}",
+            web::delete().to(handlers::mark_unplayed_endpoint),
         )
         .route(
             "/Users/{uid}/PlayedItems/{id}",
-            web::delete().to(handlers::user_played_item),
+            web::post().to(handlers::mark_played_legacy),
+        )
+        .route(
+            "/Users/{uid}/PlayedItems/{id}",
+            web::delete().to(handlers::mark_unplayed_legacy),
+        )
+        .route(
+            "/UserItems/{id}/Rating",
+            web::post().to(handlers::set_rating_endpoint),
+        )
+        .route(
+            "/UserItems/{id}/Rating",
+            web::delete().to(handlers::clear_rating_endpoint),
+        )
+        .route(
+            "/Users/{uid}/Items/{id}/Rating",
+            web::post().to(handlers::set_rating_legacy),
+        )
+        .route(
+            "/Users/{uid}/Items/{id}/Rating",
+            web::delete().to(handlers::clear_rating_legacy),
         )
         // Favorites — modelled after the Jellyfin OpenAPI UserLibrary tag.
         // Both the spec form (`/UserFavoriteItems/{id}`) and the legacy
@@ -1315,5 +1359,201 @@ mod tests {
             test::call_service(&app, req).await.status(),
             StatusCode::NOT_FOUND
         );
+    }
+
+    /// Exercises the full UserData API surface modelled after the Jellyfin
+    /// OpenAPI spec (UserLibrary tag): GET/POST /UserItems/{id}/UserData,
+    /// POST+DELETE /UserPlayedItems/{id}, POST+DELETE /UserItems/{id}/Rating,
+    /// plus the legacy per-user variants under /Users/{userId}/…
+    #[actix_web::test]
+    async fn user_data_roundtrip_played_rating_and_full_update() {
+        let dir = tempdir();
+        let state = fixture_state(&dir, &dir, false).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(configure_routes),
+        )
+        .await;
+
+        // Authenticate.
+        let req = test::TestRequest::post()
+            .uri("/Users/AuthenticateByName")
+            .insert_header((
+                "X-Emby-Authorization",
+                r#"MediaBrowser Client="t", Device="d", DeviceId="i", Version="v""#,
+            ))
+            .set_json(serde_json::json!({"Username":"alice","Pw":"secret"}))
+            .to_request();
+        let auth_body: Value = test::call_and_read_body_json(&app, req).await;
+        let token = auth_body["AccessToken"].as_str().unwrap().to_string();
+        let user_id = auth_body["User"]["Id"].as_str().unwrap().to_string();
+
+        // Discover the song GUID.
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=Audio")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let songs: Value = test::call_and_read_body_json(&app, req).await;
+        let song_id = songs["Items"][0]["Id"].as_str().unwrap().to_string();
+
+        // GET /UserItems/{id}/UserData on a fresh item → defaults.
+        let req = test::TestRequest::get()
+            .uri(&format!("/UserItems/{song_id}/UserData"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let ud: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(ud["Played"], false);
+        assert_eq!(ud["PlayCount"], 0);
+        assert_eq!(ud["PlaybackPositionTicks"], 0);
+        assert_eq!(ud["IsFavorite"], false);
+        assert!(ud["Rating"].is_null());
+        assert!(ud["Likes"].is_null());
+        assert_eq!(ud["Key"], song_id);
+        assert_eq!(ud["ItemId"], song_id);
+
+        // POST /UserPlayedItems/{id} → Played=true, PlayCount=1, LastPlayedDate set.
+        let req = test::TestRequest::post()
+            .uri(&format!("/UserPlayedItems/{song_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let ud: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(ud["Played"], true);
+        assert_eq!(ud["PlayCount"], 1);
+        assert!(ud["LastPlayedDate"].as_str().unwrap().len() >= 19);
+
+        // Same POST again — PlayCount increments.
+        let req = test::TestRequest::post()
+            .uri(&format!("/UserPlayedItems/{song_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let ud: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(ud["PlayCount"], 2);
+
+        // /Items/{id} detail now reflects the played state.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Items/{song_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let item: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(item["UserData"]["Played"], true);
+        assert_eq!(item["UserData"]["PlayCount"], 2);
+
+        // POST /UserItems/{id}/Rating?likes=true → Likes=true.
+        let req = test::TestRequest::post()
+            .uri(&format!("/UserItems/{song_id}/Rating?likes=true"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let ud: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(ud["Likes"], true);
+
+        // Play state is preserved across Rating writes.
+        assert_eq!(ud["PlayCount"], 2);
+        assert_eq!(ud["Played"], true);
+
+        // DELETE /UserItems/{id}/Rating → Likes cleared.
+        let req = test::TestRequest::delete()
+            .uri(&format!("/UserItems/{song_id}/Rating"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let ud: Value = test::call_and_read_body_json(&app, req).await;
+        assert!(ud["Likes"].is_null());
+
+        // DELETE /UserPlayedItems/{id} → Played reset, but Likes stays cleared.
+        let req = test::TestRequest::delete()
+            .uri(&format!("/UserPlayedItems/{song_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let ud: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(ud["Played"], false);
+        assert_eq!(ud["PlayCount"], 0);
+        assert_eq!(ud["PlaybackPositionTicks"], 0);
+        assert!(ud["LastPlayedDate"].is_null());
+
+        // POST /UserItems/{id}/UserData with a full body — sets Rating,
+        // Position, Played, and IsFavorite in a single call.
+        let req = test::TestRequest::post()
+            .uri(&format!("/UserItems/{song_id}/UserData"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .set_json(serde_json::json!({
+                "Rating": 8.5,
+                "PlaybackPositionTicks": 12_345_678_i64,
+                "PlayCount": 5,
+                "Played": true,
+                "IsFavorite": true,
+                "Likes": false,
+                "LastPlayedDate": "2026-01-02T03:04:05.0000000",
+            }))
+            .to_request();
+        let ud: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(ud["Rating"], 8.5);
+        assert_eq!(ud["PlaybackPositionTicks"], 12_345_678_i64);
+        assert_eq!(ud["PlayCount"], 5);
+        assert_eq!(ud["Played"], true);
+        assert_eq!(ud["IsFavorite"], true);
+        assert_eq!(ud["Likes"], false);
+        assert_eq!(ud["LastPlayedDate"], "2026-01-02T03:04:05.0000000");
+
+        // Persisted: fetching the item detail reflects everything above.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Items/{song_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let item: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(item["UserData"]["Rating"], 8.5);
+        assert_eq!(item["UserData"]["IsFavorite"], true);
+        assert_eq!(item["UserData"]["PlaybackPositionTicks"], 12_345_678_i64);
+
+        // Legacy per-user endpoints work the same way. Clear the played
+        // flag via `/Users/{uid}/PlayedItems/{id}` (DELETE) and confirm.
+        let req = test::TestRequest::delete()
+            .uri(&format!("/Users/{user_id}/PlayedItems/{song_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let ud: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(ud["Played"], false);
+        assert_eq!(ud["PlayCount"], 0);
+        // Rating / IsFavorite / Likes survive the played-state reset.
+        assert_eq!(ud["IsFavorite"], true);
+        assert_eq!(ud["Rating"], 8.5);
+        assert_eq!(ud["Likes"], false);
+
+        // Legacy per-user rating endpoint — dislikes=false via query.
+        let req = test::TestRequest::post()
+            .uri(&format!(
+                "/Users/{user_id}/Items/{song_id}/Rating?likes=false"
+            ))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let ud: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(ud["Likes"], false);
+
+        // Legacy per-user GET UserData.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Users/{user_id}/Items/{song_id}/UserData"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let ud: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(ud["Likes"], false);
+        assert_eq!(ud["IsFavorite"], true);
+
+        // Unknown GUID → 404 on every write path.
+        let bogus = "00000000-0000-0000-0000-000000000000";
+        for uri in [
+            format!("/UserPlayedItems/{bogus}"),
+            format!("/UserItems/{bogus}/Rating"),
+            format!("/UserItems/{bogus}/UserData"),
+        ] {
+            let req = test::TestRequest::post()
+                .uri(&uri)
+                .insert_header(("X-Emby-Token", token.clone()))
+                .set_json(serde_json::json!({}))
+                .to_request();
+            assert_eq!(
+                test::call_service(&app, req).await.status(),
+                StatusCode::NOT_FOUND,
+                "expected 404 for {uri}"
+            );
+        }
     }
 }

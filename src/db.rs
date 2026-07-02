@@ -85,6 +85,20 @@ async fn migrate(pool: &Db) -> Result<()> {
             starred_at  TEXT NOT NULL
         );
 
+        -- Backing store for Jellyfin's UserItemDataDto (except `IsFavorite`,
+        -- which lives in `starred`). smolsonic is single-user, so we key by
+        -- the native item id and skip a user_id column. `likes` is nullable:
+        -- NULL = unset, 1 = thumbs-up, 0 = thumbs-down.
+        CREATE TABLE IF NOT EXISTS user_item_data (
+            id                      TEXT PRIMARY KEY,
+            played                  INTEGER NOT NULL DEFAULT 0,
+            play_count              INTEGER NOT NULL DEFAULT 0,
+            playback_position_ticks INTEGER NOT NULL DEFAULT 0,
+            last_played_date        TEXT,
+            rating                  REAL,
+            likes                   INTEGER
+        );
+
         CREATE TABLE IF NOT EXISTS playlists (
             id          TEXT PRIMARY KEY,
             name        TEXT NOT NULL,

@@ -758,6 +758,157 @@ pub async fn is_starred(pool: &Db, native_id: &str) -> Result<bool> {
     Ok(row.is_some())
 }
 
+// ── UserItemData ──────────────────────────────────────────────────────────────
+
+/// Snapshot of every non-favorite field in Jellyfin's `UserItemDataDto`.
+/// Rows missing from `user_item_data` map to `UserItemData::default()` —
+/// clients see "fresh" state for anything they haven't touched yet.
+#[derive(Debug, Clone, Default)]
+pub struct UserItemData {
+    pub played: bool,
+    pub play_count: i32,
+    pub playback_position_ticks: i64,
+    pub last_played_date: Option<String>,
+    pub rating: Option<f64>,
+    pub likes: Option<bool>,
+}
+
+pub async fn get_user_item_data(pool: &Db, native_id: &str) -> Result<UserItemData> {
+    let row: Option<(i64, i64, i64, Option<String>, Option<f64>, Option<i64>)> = sqlx::query_as(
+        "SELECT played, play_count, playback_position_ticks, last_played_date, rating, likes
+         FROM user_item_data WHERE id = ?1",
+    )
+    .bind(native_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(match row {
+        None => UserItemData::default(),
+        Some((played, play_count, ticks, last, rating, likes)) => UserItemData {
+            played: played != 0,
+            play_count: play_count as i32,
+            playback_position_ticks: ticks,
+            last_played_date: last,
+            rating,
+            likes: likes.map(|v| v != 0),
+        },
+    })
+}
+
+/// Increment `PlayCount` by 1, set `Played=true`, and stamp `LastPlayedDate`.
+/// Mirrors Jellyfin's `MarkPlayedItem` handler — resets the resume position
+/// to 0 because the item has just finished playing.
+pub async fn mark_played(pool: &Db, native_id: &str, when: &str) -> Result<UserItemData> {
+    sqlx::query(
+        "INSERT INTO user_item_data (id, played, play_count, playback_position_ticks, last_played_date)
+         VALUES (?1, 1, 1, 0, ?2)
+         ON CONFLICT(id) DO UPDATE SET
+            played = 1,
+            play_count = play_count + 1,
+            playback_position_ticks = 0,
+            last_played_date = excluded.last_played_date",
+    )
+    .bind(native_id)
+    .bind(when)
+    .execute(pool)
+    .await?;
+    get_user_item_data(pool, native_id).await
+}
+
+/// Reset `Played=false`, `PlayCount=0`, `PlaybackPositionTicks=0`, and clear
+/// `LastPlayedDate`. Rating / likes are preserved.
+pub async fn mark_unplayed(pool: &Db, native_id: &str) -> Result<UserItemData> {
+    sqlx::query(
+        "INSERT INTO user_item_data (id, played, play_count, playback_position_ticks, last_played_date)
+         VALUES (?1, 0, 0, 0, NULL)
+         ON CONFLICT(id) DO UPDATE SET
+            played = 0,
+            play_count = 0,
+            playback_position_ticks = 0,
+            last_played_date = NULL",
+    )
+    .bind(native_id)
+    .execute(pool)
+    .await?;
+    get_user_item_data(pool, native_id).await
+}
+
+/// `POST /UserItems/{itemId}/Rating?likes=…` sets thumbs-up/down; DELETE on
+/// the same path clears it. Pass `None` to clear.
+pub async fn set_likes(pool: &Db, native_id: &str, likes: Option<bool>) -> Result<UserItemData> {
+    let value: Option<i64> = likes.map(|v| if v { 1 } else { 0 });
+    sqlx::query(
+        "INSERT INTO user_item_data (id, likes) VALUES (?1, ?2)
+         ON CONFLICT(id) DO UPDATE SET likes = excluded.likes",
+    )
+    .bind(native_id)
+    .bind(value)
+    .execute(pool)
+    .await?;
+    get_user_item_data(pool, native_id).await
+}
+
+/// Partial update body from `POST /UserItems/{itemId}/UserData`. The outer
+/// `Option` distinguishes "field omitted" from "field present". For nullable
+/// fields (last_played_date, rating, likes) the inner `Option` distinguishes
+/// "present with value" from "present but null → clear".
+#[derive(Debug, Default, Clone)]
+pub struct UserItemDataUpdate {
+    pub played: Option<bool>,
+    pub play_count: Option<i32>,
+    pub playback_position_ticks: Option<i64>,
+    pub last_played_date: Option<Option<String>>,
+    pub rating: Option<Option<f64>>,
+    pub likes: Option<Option<bool>>,
+}
+
+pub async fn update_user_item_data(
+    pool: &Db,
+    native_id: &str,
+    update: UserItemDataUpdate,
+) -> Result<UserItemData> {
+    let mut current = get_user_item_data(pool, native_id).await?;
+    if let Some(v) = update.played {
+        current.played = v;
+    }
+    if let Some(v) = update.play_count {
+        current.play_count = v;
+    }
+    if let Some(v) = update.playback_position_ticks {
+        current.playback_position_ticks = v;
+    }
+    if let Some(v) = update.last_played_date {
+        current.last_played_date = v;
+    }
+    if let Some(v) = update.rating {
+        current.rating = v;
+    }
+    if let Some(v) = update.likes {
+        current.likes = v;
+    }
+    sqlx::query(
+        "INSERT INTO user_item_data
+            (id, played, play_count, playback_position_ticks, last_played_date, rating, likes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(id) DO UPDATE SET
+            played = excluded.played,
+            play_count = excluded.play_count,
+            playback_position_ticks = excluded.playback_position_ticks,
+            last_played_date = excluded.last_played_date,
+            rating = excluded.rating,
+            likes = excluded.likes",
+    )
+    .bind(native_id)
+    .bind(if current.played { 1_i64 } else { 0_i64 })
+    .bind(current.play_count as i64)
+    .bind(current.playback_position_ticks)
+    .bind(current.last_played_date.clone())
+    .bind(current.rating)
+    .bind(current.likes.map(|v| if v { 1_i64 } else { 0_i64 }))
+    .execute(pool)
+    .await?;
+    Ok(current)
+}
+
 // ── Playlists ─────────────────────────────────────────────────────────────────
 
 pub async fn all_playlists(pool: &Db) -> Result<Vec<Playlist>> {

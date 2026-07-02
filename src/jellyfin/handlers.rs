@@ -478,22 +478,35 @@ fn wants_favorites_only(q: &ItemsQuery) -> bool {
     includes(&q.filters, "IsFavorite")
 }
 
-/// Build a `UserItemDataDto` given the item's Jellyfin GUID and its current
-/// starred state. Every `*_to_dto` helper uses this so `IsFavorite` reflects
-/// the `starred` table without repeating the boilerplate.
-fn user_data_for(id: String, is_favorite: bool) -> UserItemDataDto {
+/// Build a `UserItemDataDto` by folding together the `starred` sidecar and
+/// the `user_item_data` row for `native_id`. `jf_guid` is the Jellyfin GUID
+/// we emit in `Key`/`ItemId` (clients use it to correlate the DTO with the
+/// containing BaseItem). Every `*_to_dto` helper — and the standalone
+/// `/UserItems/{itemId}/UserData` GET — uses this so the fields stay in
+/// sync with disk state.
+async fn build_user_data(
+    state: &JellyfinState,
+    native_id: &str,
+    jf_guid: String,
+) -> UserItemDataDto {
+    let is_favorite = repo::is_starred(&state.pool, native_id)
+        .await
+        .unwrap_or(false);
+    let data = repo::get_user_item_data(&state.pool, native_id)
+        .await
+        .unwrap_or_default();
     UserItemDataDto {
-        rating: None,
+        rating: data.rating,
         played_percentage: None,
         unplayed_item_count: None,
-        playback_position_ticks: 0,
-        play_count: 0,
+        playback_position_ticks: data.playback_position_ticks,
+        play_count: data.play_count,
         is_favorite,
-        likes: None,
-        last_played_date: None,
-        played: false,
-        key: id.clone(),
-        item_id: id,
+        likes: data.likes,
+        last_played_date: data.last_played_date,
+        played: data.played,
+        key: jf_guid.clone(),
+        item_id: jf_guid,
     }
 }
 
@@ -501,7 +514,7 @@ async fn artist_to_dto(state: &JellyfinState, a: &Artist) -> BaseItemDto {
     let id = mapping::remember_artist(&state.pool, a)
         .await
         .unwrap_or_else(|_| mapping::guid(mapping::KIND_ARTIST, &a.id));
-    let is_favorite = repo::is_starred(&state.pool, &a.id).await.unwrap_or(false);
+    let user_data = build_user_data(state, &a.id, id.clone()).await;
     BaseItemDto {
         id: id.clone(),
         server_id: Some(state.server_id.clone()),
@@ -514,7 +527,7 @@ async fn artist_to_dto(state: &JellyfinState, a: &Artist) -> BaseItemDto {
         image_tags: Some(ImageTags {
             primary: Some(a.id.clone()),
         }),
-        user_data: Some(user_data_for(id.clone(), is_favorite)),
+        user_data: Some(user_data),
         ..Default::default()
     }
 }
@@ -530,7 +543,7 @@ async fn album_to_dto(state: &JellyfinState, al: &Album) -> BaseItemDto {
     let duration_secs = repo::songs_for_album_duration(&state.pool, &al.id)
         .await
         .unwrap_or(0);
-    let is_favorite = repo::is_starred(&state.pool, &al.id).await.unwrap_or(false);
+    let user_data = build_user_data(state, &al.id, id.clone()).await;
     BaseItemDto {
         id: id.clone(),
         server_id: Some(state.server_id.clone()),
@@ -569,7 +582,7 @@ async fn album_to_dto(state: &JellyfinState, al: &Album) -> BaseItemDto {
         image_tags: Some(ImageTags {
             primary: al.cover_art.clone().map(|_| al.id.clone()),
         }),
-        user_data: Some(user_data_for(id, is_favorite)),
+        user_data: Some(user_data),
         ..Default::default()
     }
 }
@@ -581,7 +594,7 @@ async fn song_to_dto(state: &JellyfinState, s: &Song) -> BaseItemDto {
     let album_guid = mapping::guid(mapping::KIND_ALBUM, &s.album_id);
     let artist_guid = mapping::guid(mapping::KIND_ARTIST, &s.artist_id);
     let run_time_ticks = s.duration_ms * TICKS_PER_MS;
-    let is_favorite = repo::is_starred(&state.pool, &s.id).await.unwrap_or(false);
+    let user_data = build_user_data(state, &s.id, id.clone()).await;
 
     let audio_stream = MediaStream {
         codec: Some(s.suffix.clone()),
@@ -671,7 +684,7 @@ async fn song_to_dto(state: &JellyfinState, s: &Song) -> BaseItemDto {
             primary: s.cover_art.clone().or_else(|| Some(s.album_id.clone())),
         }),
         image_blur_hashes: Some(ImageBlurHashes::default()),
-        user_data: Some(user_data_for(id, is_favorite)),
+        user_data: Some(user_data),
         ..Default::default()
     }
 }
@@ -685,7 +698,7 @@ async fn playlist_to_dto(state: &JellyfinState, p: &Playlist) -> BaseItemDto {
         .unwrap_or_default();
     let child_count = songs.len() as i32;
     let run_time_ticks: i64 = songs.iter().map(|s| s.duration_ms * TICKS_PER_MS).sum();
-    let is_favorite = repo::is_starred(&state.pool, &p.id).await.unwrap_or(false);
+    let user_data = build_user_data(state, &p.id, id.clone()).await;
     BaseItemDto {
         id: id.clone(),
         server_id: Some(state.server_id.clone()),
@@ -701,7 +714,7 @@ async fn playlist_to_dto(state: &JellyfinState, p: &Playlist) -> BaseItemDto {
         child_count: Some(child_count),
         song_count: Some(child_count),
         run_time_ticks: Some(run_time_ticks),
-        user_data: Some(user_data_for(id, is_favorite)),
+        user_data: Some(user_data),
         ..Default::default()
     }
 }
@@ -711,7 +724,7 @@ async fn video_to_dto(state: &JellyfinState, v: &Video) -> BaseItemDto {
         .await
         .unwrap_or_else(|_| mapping::guid(mapping::KIND_VIDEO, &v.id));
     let run_time_ticks = v.duration_ms * TICKS_PER_MS;
-    let is_favorite = repo::is_starred(&state.pool, &v.id).await.unwrap_or(false);
+    let user_data = build_user_data(state, &v.id, id.clone()).await;
 
     let video_stream = MediaStream {
         codec: Some(v.container.clone()),
@@ -806,7 +819,7 @@ async fn video_to_dto(state: &JellyfinState, v: &Video) -> BaseItemDto {
             primary: v.poster_path.as_ref().map(|_| id.clone()),
         }),
         image_blur_hashes: Some(ImageBlurHashes::default()),
-        user_data: Some(user_data_for(id, is_favorite)),
+        user_data: Some(user_data),
         ..Default::default()
     }
 }
@@ -2370,14 +2383,6 @@ pub async fn sessions_playing_stopped(_user: AuthedUser, _body: web::Json<Value>
     HttpResponse::NoContent().finish()
 }
 
-pub async fn user_played_item(
-    _user: AuthedUser,
-    _state: web::Data<JellyfinState>,
-    _path: web::Path<(String, String)>,
-) -> HttpResponse {
-    HttpResponse::NoContent().finish()
-}
-
 // ── Favorites ───────────────────────────────────────────────────────────────
 //
 // Spec (Jellyfin OpenAPI, UserLibrary tag):
@@ -2425,7 +2430,7 @@ async fn set_favorite(
         return HttpResponse::InternalServerError().finish();
     }
     let dashed = mapping::normalize_guid(&item_guid);
-    HttpResponse::Ok().json(user_data_for(dashed, starred))
+    HttpResponse::Ok().json(build_user_data(&state, &native, dashed).await)
 }
 
 pub async fn add_favorite_item(
@@ -2460,6 +2465,295 @@ pub async fn remove_user_favorite_item(
 ) -> HttpResponse {
     let (_user_id, item_id) = path.into_inner();
     set_favorite(state, item_id, false).await
+}
+
+// ── UserData / PlayedItems / Rating ─────────────────────────────────────────
+//
+// Spec (Jellyfin OpenAPI, UserLibrary tag):
+//   GET    /UserItems/{itemId}/UserData          → UserItemDataDto
+//   POST   /UserItems/{itemId}/UserData          → UserItemDataDto (body: UpdateUserItemDataDto)
+//   POST   /UserPlayedItems/{itemId}?datePlayed= → UserItemDataDto (mark played, PlayCount++)
+//   DELETE /UserPlayedItems/{itemId}             → UserItemDataDto (mark unplayed)
+//   POST   /UserItems/{itemId}/Rating?likes=…    → UserItemDataDto (set Likes)
+//   DELETE /UserItems/{itemId}/Rating            → UserItemDataDto (clear Likes)
+//
+// Legacy per-user forms hit by older clients (Symfonium, Finamp <=1.9):
+//   POST   /Users/{userId}/PlayedItems/{itemId}
+//   DELETE /Users/{userId}/PlayedItems/{itemId}
+//   POST   /Users/{userId}/Items/{itemId}/UserData
+//   GET    /Users/{userId}/Items/{itemId}/UserData
+//   POST   /Users/{userId}/Items/{itemId}/Rating
+//   DELETE /Users/{userId}/Items/{itemId}/Rating
+//
+// All state lives in the `user_item_data` sidecar keyed by native id; the
+// `userId` param is accepted but not consulted (smolsonic is single-user).
+
+/// Resolve `item_guid` to (native_id, dashed jf guid), 404 if unknown.
+async fn user_data_target(
+    state: &JellyfinState,
+    item_guid: &str,
+) -> Result<(String, String), HttpResponse> {
+    let g = mapping::normalize_guid(item_guid);
+    match resolve_native(state, &g).await {
+        Some((_kind, native)) => Ok((native, g)),
+        None => Err(HttpResponse::NotFound().finish()),
+    }
+}
+
+async fn respond_user_data(state: &JellyfinState, native: &str, jf_guid: String) -> HttpResponse {
+    HttpResponse::Ok().json(build_user_data(state, native, jf_guid).await)
+}
+
+/// `?likes=true|false` — query param for POST /UserItems/{id}/Rating (and
+/// its legacy per-user variant).
+#[derive(Debug, Deserialize)]
+pub struct RatingQuery {
+    #[serde(default, alias = "Likes")]
+    pub likes: Option<bool>,
+}
+
+/// `?datePlayed=…` — optional query param for POST /UserPlayedItems/{id}
+/// (and the legacy `/Users/{uid}/PlayedItems/{id}` variant). When present
+/// it overrides `now_iso()` as the stamped `LastPlayedDate`.
+#[derive(Debug, Deserialize)]
+pub struct PlayedQuery {
+    #[serde(default, alias = "DatePlayed", rename = "datePlayed")]
+    pub date_played: Option<String>,
+}
+
+pub async fn get_user_item_data_endpoint(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let (native, guid) = match user_data_target(&state, &path.into_inner()).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    respond_user_data(&state, &native, guid).await
+}
+
+pub async fn update_user_item_data_endpoint(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    body: web::Json<super::dto::UpdateUserItemDataDto>,
+) -> HttpResponse {
+    let (native, guid) = match user_data_target(&state, &path.into_inner()).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    if let Err(e) = apply_update(&state, &native, body.into_inner()).await {
+        tracing::error!("jellyfin: user_item_data update on {native}: {e}");
+        return HttpResponse::InternalServerError().finish();
+    }
+    respond_user_data(&state, &native, guid).await
+}
+
+/// Legacy `POST /Users/{userId}/Items/{itemId}/UserData`. Same payload as
+/// the spec-form endpoint above.
+pub async fn update_user_item_data_legacy(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<(String, String)>,
+    body: web::Json<super::dto::UpdateUserItemDataDto>,
+) -> HttpResponse {
+    let (_user_id, item_id) = path.into_inner();
+    let (native, guid) = match user_data_target(&state, &item_id).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    if let Err(e) = apply_update(&state, &native, body.into_inner()).await {
+        tracing::error!("jellyfin: user_item_data update on {native}: {e}");
+        return HttpResponse::InternalServerError().finish();
+    }
+    respond_user_data(&state, &native, guid).await
+}
+
+pub async fn get_user_item_data_legacy(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<(String, String)>,
+) -> HttpResponse {
+    let (_user_id, item_id) = path.into_inner();
+    let (native, guid) = match user_data_target(&state, &item_id).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    respond_user_data(&state, &native, guid).await
+}
+
+async fn apply_update(
+    state: &JellyfinState,
+    native: &str,
+    body: super::dto::UpdateUserItemDataDto,
+) -> anyhow::Result<()> {
+    // Convert the nullable-everywhere request DTO into the two-level Option
+    // shape repo::update_user_item_data expects: outer `Some` means "present
+    // in the body", inner value = "the value to store" (including `None` for
+    // nullable-clear on last_played_date/rating/likes).
+    let update = repo::UserItemDataUpdate {
+        played: body.played,
+        play_count: body.play_count,
+        playback_position_ticks: body.playback_position_ticks,
+        // Body carries a single `Option<String>` — client can't distinguish
+        // "leave alone" from "clear" here without a signal channel, so we
+        // treat any present body as "write this value" (which may be None).
+        last_played_date: Some(body.last_played_date),
+        rating: Some(body.rating),
+        likes: Some(body.likes),
+    };
+    repo::update_user_item_data(&state.pool, native, update).await?;
+    // Favorite state is stored in `starred` — keep the two tables in sync so
+    // the response reflects the requested toggle.
+    if let Some(fav) = body.is_favorite {
+        let now = now_iso();
+        if fav {
+            repo::star(&state.pool, native, &now).await?;
+        } else {
+            repo::unstar(&state.pool, native).await?;
+        }
+    }
+    Ok(())
+}
+
+pub async fn mark_played_endpoint(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    query: web::Query<PlayedQuery>,
+) -> HttpResponse {
+    let (native, guid) = match user_data_target(&state, &path.into_inner()).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let when = query.into_inner().date_played.unwrap_or_else(now_iso);
+    if let Err(e) = repo::mark_played(&state.pool, &native, &when).await {
+        tracing::error!("jellyfin: mark_played on {native}: {e}");
+        return HttpResponse::InternalServerError().finish();
+    }
+    respond_user_data(&state, &native, guid).await
+}
+
+pub async fn mark_unplayed_endpoint(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let (native, guid) = match user_data_target(&state, &path.into_inner()).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    if let Err(e) = repo::mark_unplayed(&state.pool, &native).await {
+        tracing::error!("jellyfin: mark_unplayed on {native}: {e}");
+        return HttpResponse::InternalServerError().finish();
+    }
+    respond_user_data(&state, &native, guid).await
+}
+
+/// `POST /Users/{userId}/PlayedItems/{itemId}` — legacy per-user variant.
+pub async fn mark_played_legacy(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<(String, String)>,
+    query: web::Query<PlayedQuery>,
+) -> HttpResponse {
+    let (_user_id, item_id) = path.into_inner();
+    let (native, guid) = match user_data_target(&state, &item_id).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    let when = query.into_inner().date_played.unwrap_or_else(now_iso);
+    if let Err(e) = repo::mark_played(&state.pool, &native, &when).await {
+        tracing::error!("jellyfin: mark_played on {native}: {e}");
+        return HttpResponse::InternalServerError().finish();
+    }
+    respond_user_data(&state, &native, guid).await
+}
+
+pub async fn mark_unplayed_legacy(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<(String, String)>,
+) -> HttpResponse {
+    let (_user_id, item_id) = path.into_inner();
+    let (native, guid) = match user_data_target(&state, &item_id).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    if let Err(e) = repo::mark_unplayed(&state.pool, &native).await {
+        tracing::error!("jellyfin: mark_unplayed on {native}: {e}");
+        return HttpResponse::InternalServerError().finish();
+    }
+    respond_user_data(&state, &native, guid).await
+}
+
+pub async fn set_rating_endpoint(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    query: web::Query<RatingQuery>,
+) -> HttpResponse {
+    let (native, guid) = match user_data_target(&state, &path.into_inner()).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    if let Err(e) = repo::set_likes(&state.pool, &native, query.into_inner().likes).await {
+        tracing::error!("jellyfin: set_likes on {native}: {e}");
+        return HttpResponse::InternalServerError().finish();
+    }
+    respond_user_data(&state, &native, guid).await
+}
+
+pub async fn clear_rating_endpoint(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let (native, guid) = match user_data_target(&state, &path.into_inner()).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    if let Err(e) = repo::set_likes(&state.pool, &native, None).await {
+        tracing::error!("jellyfin: clear_likes on {native}: {e}");
+        return HttpResponse::InternalServerError().finish();
+    }
+    respond_user_data(&state, &native, guid).await
+}
+
+pub async fn set_rating_legacy(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<(String, String)>,
+    query: web::Query<RatingQuery>,
+) -> HttpResponse {
+    let (_user_id, item_id) = path.into_inner();
+    let (native, guid) = match user_data_target(&state, &item_id).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    if let Err(e) = repo::set_likes(&state.pool, &native, query.into_inner().likes).await {
+        tracing::error!("jellyfin: set_likes on {native}: {e}");
+        return HttpResponse::InternalServerError().finish();
+    }
+    respond_user_data(&state, &native, guid).await
+}
+
+pub async fn clear_rating_legacy(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<(String, String)>,
+) -> HttpResponse {
+    let (_user_id, item_id) = path.into_inner();
+    let (native, guid) = match user_data_target(&state, &item_id).await {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    if let Err(e) = repo::set_likes(&state.pool, &native, None).await {
+        tracing::error!("jellyfin: clear_likes on {native}: {e}");
+        return HttpResponse::InternalServerError().finish();
+    }
+    respond_user_data(&state, &native, guid).await
 }
 
 // ── Misc stubs that some clients probe ──────────────────────────────────────
