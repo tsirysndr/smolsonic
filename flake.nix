@@ -44,7 +44,7 @@
         # hash Nix reports on mismatch into `outputHash` below.
         s3webuiNodeModules = pkgs.stdenv.mkDerivation {
           pname = "smolsonic-s3webui-node-modules";
-          version = "0.6.2";
+          version = "0.6.3";
 
           src = lib.fileset.toSource {
             root = ./s3webui;
@@ -82,7 +82,7 @@
         # smolsonic binary at compile time via rust-embed.
         s3webui = pkgs.stdenv.mkDerivation {
           pname = "smolsonic-s3webui";
-          version = "0.6.2";
+          version = "0.6.3";
 
           src = ./s3webui;
 
@@ -115,7 +115,7 @@
           inherit src;
 
           pname = "smolsonic";
-          version = "0.6.2";
+          version = "0.6.3";
 
           nativeBuildInputs = [
             pkgs.pkg-config
