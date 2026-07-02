@@ -349,6 +349,27 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             "/Users/{uid}/PlayedItems/{id}",
             web::delete().to(handlers::user_played_item),
         )
+        // Favorites — modelled after the Jellyfin OpenAPI UserLibrary tag.
+        // Both the spec form (`/UserFavoriteItems/{id}`) and the legacy
+        // per-user form (`/Users/{uid}/FavoriteItems/{id}`) are registered
+        // because in-the-wild clients (Findroid, Streamyfin, Moonfin, Amcfy)
+        // still hit both.
+        .route(
+            "/UserFavoriteItems/{id}",
+            web::post().to(handlers::add_favorite_item),
+        )
+        .route(
+            "/UserFavoriteItems/{id}",
+            web::delete().to(handlers::remove_favorite_item),
+        )
+        .route(
+            "/Users/{uid}/FavoriteItems/{id}",
+            web::post().to(handlers::add_user_favorite_item),
+        )
+        .route(
+            "/Users/{uid}/FavoriteItems/{id}",
+            web::delete().to(handlers::remove_user_favorite_item),
+        )
         // Common probes that clients hit — answer empty so they stop retrying.
         .route(
             "/DisplayPreferences/{id}",
@@ -1122,6 +1143,172 @@ mod tests {
         // Gone.
         let req = test::TestRequest::get()
             .uri(&format!("/Playlists/{playlist_id}"))
+            .insert_header(("X-Emby-Token", token))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    /// Exercises the full Favorites API surface modelled after the Jellyfin
+    /// OpenAPI spec (UserLibrary tag + `?isFavorite` / `?Filters=IsFavorite`
+    /// on `/Items` and `/Artists`).
+    #[actix_web::test]
+    async fn favorites_roundtrip_via_userfavoriteitems_and_filters() {
+        let dir = tempdir();
+        let state = fixture_state(&dir, &dir, false).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(configure_routes),
+        )
+        .await;
+
+        // Authenticate.
+        let req = test::TestRequest::post()
+            .uri("/Users/AuthenticateByName")
+            .insert_header((
+                "X-Emby-Authorization",
+                r#"MediaBrowser Client="t", Device="d", DeviceId="i", Version="v""#,
+            ))
+            .set_json(serde_json::json!({"Username":"alice","Pw":"secret"}))
+            .to_request();
+        let auth_body: Value = test::call_and_read_body_json(&app, req).await;
+        let token = auth_body["AccessToken"].as_str().unwrap().to_string();
+        let user_id = auth_body["User"]["Id"].as_str().unwrap().to_string();
+
+        // Discover the song's Jellyfin GUID (populates jf_guids as a side effect).
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=Audio")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let songs: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(songs["TotalRecordCount"], 1);
+        let song_id = songs["Items"][0]["Id"].as_str().unwrap().to_string();
+        // Fresh song → IsFavorite starts false.
+        assert_eq!(songs["Items"][0]["UserData"]["IsFavorite"], false);
+
+        // Discover the artist / album GUIDs the same way.
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=MusicArtist")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let artists: Value = test::call_and_read_body_json(&app, req).await;
+        let artist_id = artists["Items"][0]["Id"].as_str().unwrap().to_string();
+
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=MusicAlbum")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let albums: Value = test::call_and_read_body_json(&app, req).await;
+        let album_id = albums["Items"][0]["Id"].as_str().unwrap().to_string();
+
+        // POST /UserFavoriteItems/{songId} — spec-compliant endpoint.
+        let req = test::TestRequest::post()
+            .uri(&format!("/UserFavoriteItems/{song_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let user_data: Value = test::read_body_json(resp).await;
+        // Per spec `UserItemDataDto.IsFavorite` and `ItemId`/`Key` are required.
+        assert_eq!(user_data["IsFavorite"], true);
+        assert_eq!(user_data["ItemId"], song_id);
+        assert_eq!(user_data["Key"], song_id);
+
+        // The item's user_data now reflects the favorite state.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Items/{song_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let item: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(item["UserData"]["IsFavorite"], true);
+
+        // Also via the per-user detail path (`/Users/{uid}/Items/{id}`).
+        let req = test::TestRequest::get()
+            .uri(&format!("/Users/{user_id}/Items/{song_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let item: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(item["UserData"]["IsFavorite"], true);
+
+        // Legacy per-user endpoint — POST on the album should also stick.
+        let req = test::TestRequest::post()
+            .uri(&format!("/Users/{user_id}/FavoriteItems/{album_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let user_data: Value = test::read_body_json(resp).await;
+        assert_eq!(user_data["IsFavorite"], true);
+        assert_eq!(user_data["ItemId"], album_id);
+
+        // Favor the artist so `/Artists?isFavorite=true` returns something.
+        let req = test::TestRequest::post()
+            .uri(&format!("/UserFavoriteItems/{artist_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        assert_eq!(test::call_service(&app, req).await.status(), StatusCode::OK);
+
+        // `/Items?Filters=IsFavorite` returns the union across types (artist,
+        // album, song). Total = 3 for our fixture.
+        let req = test::TestRequest::get()
+            .uri("/Items?Filters=IsFavorite&Recursive=true")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let favs: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(favs["TotalRecordCount"], 3);
+
+        // `/Items?IsFavorite=true&IncludeItemTypes=Audio` filters to only songs.
+        let req = test::TestRequest::get()
+            .uri("/Items?IsFavorite=true&IncludeItemTypes=Audio")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let favs: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(favs["TotalRecordCount"], 1);
+        assert_eq!(favs["Items"][0]["Id"], song_id);
+        assert_eq!(favs["Items"][0]["Type"], "Audio");
+
+        // `/Artists?isFavorite=true` — spec-level filter directly on /Artists.
+        let req = test::TestRequest::get()
+            .uri("/Artists?isFavorite=true")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let favs: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(favs["TotalRecordCount"], 1);
+        assert_eq!(favs["Items"][0]["Id"], artist_id);
+
+        // DELETE /UserFavoriteItems/{songId} unstars it.
+        let req = test::TestRequest::delete()
+            .uri(&format!("/UserFavoriteItems/{song_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let user_data: Value = test::read_body_json(resp).await;
+        assert_eq!(user_data["IsFavorite"], false);
+        assert_eq!(user_data["ItemId"], song_id);
+
+        // Detail now reflects the removal.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Items/{song_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let item: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(item["UserData"]["IsFavorite"], false);
+
+        // Filter now returns only the artist + album (song no longer starred).
+        let req = test::TestRequest::get()
+            .uri("/Items?Filters=IsFavorite&Recursive=true")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let favs: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(favs["TotalRecordCount"], 2);
+
+        // POST on an unknown GUID → 404.
+        let req = test::TestRequest::post()
+            .uri("/UserFavoriteItems/00000000-0000-0000-0000-000000000000")
             .insert_header(("X-Emby-Token", token))
             .to_request();
         assert_eq!(

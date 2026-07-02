@@ -413,6 +413,8 @@ pub struct ItemsQuery {
     pub enable_total_record_count: Option<bool>,
     pub enable_images: Option<bool>,
     pub fields: Option<String>,
+    pub is_favorite: Option<bool>,
+    pub filters: Option<String>,
 }
 
 fn collect_query(req: &HttpRequest) -> std::collections::HashMap<String, Vec<String>> {
@@ -458,6 +460,40 @@ fn parse_items_query(req: &HttpRequest) -> ItemsQuery {
         enable_total_record_count: parse_bool("enableTotalRecordCount"),
         enable_images: parse_bool("enableImages"),
         fields: csv("fields").or_else(|| csv("Fields")),
+        is_favorite: parse_bool("isFavorite").or_else(|| parse_bool("IsFavorite")),
+        filters: csv("filters").or_else(|| csv("Filters")),
+    }
+}
+
+/// True when the client asked for favorites-only via either
+/// `?IsFavorite=true` (per the OpenAPI `isFavorite` param) or
+/// `?Filters=IsFavorite` (per the OpenAPI `filters` CSV enum, which also
+/// includes `IsPlayed`, `IsResumable`, etc.). We only honour the affirmative
+/// direction — `IsFavorite=false` is a "don't filter" no-op, matching how
+/// most clients construct the URL.
+fn wants_favorites_only(q: &ItemsQuery) -> bool {
+    if q.is_favorite == Some(true) {
+        return true;
+    }
+    includes(&q.filters, "IsFavorite")
+}
+
+/// Build a `UserItemDataDto` given the item's Jellyfin GUID and its current
+/// starred state. Every `*_to_dto` helper uses this so `IsFavorite` reflects
+/// the `starred` table without repeating the boilerplate.
+fn user_data_for(id: String, is_favorite: bool) -> UserItemDataDto {
+    UserItemDataDto {
+        rating: None,
+        played_percentage: None,
+        unplayed_item_count: None,
+        playback_position_ticks: 0,
+        play_count: 0,
+        is_favorite,
+        likes: None,
+        last_played_date: None,
+        played: false,
+        key: id.clone(),
+        item_id: id,
     }
 }
 
@@ -465,8 +501,9 @@ async fn artist_to_dto(state: &JellyfinState, a: &Artist) -> BaseItemDto {
     let id = mapping::remember_artist(&state.pool, a)
         .await
         .unwrap_or_else(|_| mapping::guid(mapping::KIND_ARTIST, &a.id));
+    let is_favorite = repo::is_starred(&state.pool, &a.id).await.unwrap_or(false);
     BaseItemDto {
-        id,
+        id: id.clone(),
         server_id: Some(state.server_id.clone()),
         name: Some(a.name.clone()),
         item_type: "MusicArtist",
@@ -477,6 +514,7 @@ async fn artist_to_dto(state: &JellyfinState, a: &Artist) -> BaseItemDto {
         image_tags: Some(ImageTags {
             primary: Some(a.id.clone()),
         }),
+        user_data: Some(user_data_for(id.clone(), is_favorite)),
         ..Default::default()
     }
 }
@@ -492,6 +530,7 @@ async fn album_to_dto(state: &JellyfinState, al: &Album) -> BaseItemDto {
     let duration_secs = repo::songs_for_album_duration(&state.pool, &al.id)
         .await
         .unwrap_or(0);
+    let is_favorite = repo::is_starred(&state.pool, &al.id).await.unwrap_or(false);
     BaseItemDto {
         id: id.clone(),
         server_id: Some(state.server_id.clone()),
@@ -510,7 +549,7 @@ async fn album_to_dto(state: &JellyfinState, al: &Album) -> BaseItemDto {
             None
         },
         album: Some(al.title.clone()),
-        album_id: Some(id),
+        album_id: Some(id.clone()),
         album_artist: Some(al.artist.clone()),
         album_artists: Some(vec![NameGuidPair {
             name: Some(al.artist.clone()),
@@ -530,6 +569,7 @@ async fn album_to_dto(state: &JellyfinState, al: &Album) -> BaseItemDto {
         image_tags: Some(ImageTags {
             primary: al.cover_art.clone().map(|_| al.id.clone()),
         }),
+        user_data: Some(user_data_for(id, is_favorite)),
         ..Default::default()
     }
 }
@@ -541,6 +581,7 @@ async fn song_to_dto(state: &JellyfinState, s: &Song) -> BaseItemDto {
     let album_guid = mapping::guid(mapping::KIND_ALBUM, &s.album_id);
     let artist_guid = mapping::guid(mapping::KIND_ARTIST, &s.artist_id);
     let run_time_ticks = s.duration_ms * TICKS_PER_MS;
+    let is_favorite = repo::is_starred(&state.pool, &s.id).await.unwrap_or(false);
 
     let audio_stream = MediaStream {
         codec: Some(s.suffix.clone()),
@@ -630,19 +671,7 @@ async fn song_to_dto(state: &JellyfinState, s: &Song) -> BaseItemDto {
             primary: s.cover_art.clone().or_else(|| Some(s.album_id.clone())),
         }),
         image_blur_hashes: Some(ImageBlurHashes::default()),
-        user_data: Some(UserItemDataDto {
-            rating: None,
-            played_percentage: None,
-            unplayed_item_count: None,
-            playback_position_ticks: 0,
-            play_count: 0,
-            is_favorite: false,
-            likes: None,
-            last_played_date: None,
-            played: false,
-            key: id.clone(),
-            item_id: id,
-        }),
+        user_data: Some(user_data_for(id, is_favorite)),
         ..Default::default()
     }
 }
@@ -656,6 +685,7 @@ async fn playlist_to_dto(state: &JellyfinState, p: &Playlist) -> BaseItemDto {
         .unwrap_or_default();
     let child_count = songs.len() as i32;
     let run_time_ticks: i64 = songs.iter().map(|s| s.duration_ms * TICKS_PER_MS).sum();
+    let is_favorite = repo::is_starred(&state.pool, &p.id).await.unwrap_or(false);
     BaseItemDto {
         id: id.clone(),
         server_id: Some(state.server_id.clone()),
@@ -671,19 +701,7 @@ async fn playlist_to_dto(state: &JellyfinState, p: &Playlist) -> BaseItemDto {
         child_count: Some(child_count),
         song_count: Some(child_count),
         run_time_ticks: Some(run_time_ticks),
-        user_data: Some(UserItemDataDto {
-            rating: None,
-            played_percentage: None,
-            unplayed_item_count: None,
-            playback_position_ticks: 0,
-            play_count: 0,
-            is_favorite: false,
-            likes: None,
-            last_played_date: None,
-            played: false,
-            key: id.clone(),
-            item_id: id,
-        }),
+        user_data: Some(user_data_for(id, is_favorite)),
         ..Default::default()
     }
 }
@@ -693,6 +711,7 @@ async fn video_to_dto(state: &JellyfinState, v: &Video) -> BaseItemDto {
         .await
         .unwrap_or_else(|_| mapping::guid(mapping::KIND_VIDEO, &v.id));
     let run_time_ticks = v.duration_ms * TICKS_PER_MS;
+    let is_favorite = repo::is_starred(&state.pool, &v.id).await.unwrap_or(false);
 
     let video_stream = MediaStream {
         codec: Some(v.container.clone()),
@@ -787,19 +806,7 @@ async fn video_to_dto(state: &JellyfinState, v: &Video) -> BaseItemDto {
             primary: v.poster_path.as_ref().map(|_| id.clone()),
         }),
         image_blur_hashes: Some(ImageBlurHashes::default()),
-        user_data: Some(UserItemDataDto {
-            rating: None,
-            played_percentage: None,
-            unplayed_item_count: None,
-            playback_position_ticks: 0,
-            play_count: 0,
-            is_favorite: false,
-            likes: None,
-            last_played_date: None,
-            played: false,
-            key: id.clone(),
-            item_id: id,
-        }),
+        user_data: Some(user_data_for(id, is_favorite)),
         ..Default::default()
     }
 }
@@ -847,6 +854,16 @@ async fn items_impl(state: web::Data<JellyfinState>, q: ItemsQuery) -> HttpRespo
     let library_id = mapping::library_guid();
     let movies_id = mapping::movies_library_guid();
     let playlists_id = mapping::playlists_library_guid();
+
+    // Favorites-only listing — `?Filters=IsFavorite` or `?IsFavorite=true`,
+    // matching the Jellyfin OpenAPI spec's two ways of asking. This runs
+    // before *any* other dispatch (including the library-views fallback)
+    // because the reference client's "Favorites" home rail sends
+    // `?Filters=IsFavorite&Recursive=true` with no ParentId — without this
+    // short-circuit we'd return CollectionFolder tiles instead.
+    if wants_favorites_only(&q) {
+        return list_favorites(&state, &q).await;
+    }
 
     // `/Items?userId=X` with no other filters is the "show me my libraries"
     // call (real Jellyfin returns CollectionFolders here). Findroid's
@@ -1163,6 +1180,77 @@ async fn list_movies(state: &JellyfinState, q: &ItemsQuery) -> HttpResponse {
         items: dtos,
         total_record_count: total as i32,
         start_index: offset as i32,
+    })
+}
+
+/// `/Items?Filters=IsFavorite&IncludeItemTypes=…` — favourites-only listing.
+///
+/// If no type filter is set the response mixes artists, albums, songs, videos
+/// and playlists (that's what the reference Jellyfin server does for the
+/// home-screen Favorites rail). When a client narrows via `IncludeItemTypes`
+/// we return just that slice. Ordering follows `starred.starred_at DESC` —
+/// most-recently-favorited first — which matches how the reference client
+/// renders the rail.
+async fn list_favorites(state: &JellyfinState, q: &ItemsQuery) -> HttpResponse {
+    let type_filter = q.include_item_types.as_deref();
+    let all_types = type_filter.is_none();
+
+    let want_artist = all_types
+        || includes(&q.include_item_types, "MusicArtist")
+        || includes(&q.include_item_types, "AlbumArtist");
+    let want_album = all_types || includes(&q.include_item_types, "MusicAlbum");
+    let want_song = all_types || includes(&q.include_item_types, "Audio");
+    let want_video = all_types || wants_videos(q);
+    let want_playlist = all_types || includes(&q.include_item_types, "Playlist");
+
+    let mut dtos: Vec<BaseItemDto> = Vec::new();
+
+    if want_artist {
+        if let Ok(rows) = repo::starred_artists(&state.pool).await {
+            for (a, _when) in rows {
+                dtos.push(artist_to_dto(state, &a).await);
+            }
+        }
+    }
+    if want_album {
+        if let Ok(rows) = repo::starred_albums(&state.pool).await {
+            for (a, _when) in rows {
+                dtos.push(album_to_dto(state, &a).await);
+            }
+        }
+    }
+    if want_song {
+        if let Ok(rows) = repo::starred_songs(&state.pool).await {
+            for (s, _when) in rows {
+                dtos.push(song_to_dto(state, &s).await);
+            }
+        }
+    }
+    if want_video {
+        if let Ok(rows) = repo::starred_videos(&state.pool).await {
+            for (v, _when) in rows {
+                dtos.push(video_to_dto(state, &v).await);
+            }
+        }
+    }
+    if want_playlist {
+        if let Ok(rows) = repo::starred_playlists(&state.pool).await {
+            for (p, _when) in rows {
+                dtos.push(playlist_to_dto(state, &p).await);
+            }
+        }
+    }
+
+    let total = dtos.len() as i32;
+    // Honour `StartIndex` / `Limit` after the union — the caller sees a single
+    // paginated list, not per-type slices.
+    let start = q.start_index.unwrap_or(0).max(0) as usize;
+    let limit = q.limit.unwrap_or(500).max(1) as usize;
+    let items: Vec<BaseItemDto> = dtos.into_iter().skip(start).take(limit).collect();
+    HttpResponse::Ok().json(ItemsResult {
+        items,
+        total_record_count: total,
+        start_index: start as i32,
     })
 }
 
@@ -1859,6 +1947,38 @@ pub async fn artists(
     req: HttpRequest,
 ) -> HttpResponse {
     let q = parse_items_query(&req);
+
+    // `?isFavorite=true` / `?Filters=IsFavorite` on `/Artists` — return only
+    // starred artists, honouring the same start/limit paging as the plain call.
+    if wants_favorites_only(&q) {
+        let starts = q.name_starts_with.as_deref();
+        let rows = repo::starred_artists(&state.pool).await.unwrap_or_default();
+        let filtered: Vec<Artist> = rows
+            .into_iter()
+            .map(|(a, _)| a)
+            .filter(|a| match starts {
+                Some(p) if !p.is_empty() => a
+                    .name
+                    .to_ascii_lowercase()
+                    .starts_with(&p.to_ascii_lowercase()),
+                _ => true,
+            })
+            .collect();
+        let total = filtered.len() as i32;
+        let start = q.start_index.unwrap_or(0).max(0) as usize;
+        let limit = q.limit.unwrap_or(500).max(1) as usize;
+        let slice: Vec<&Artist> = filtered.iter().skip(start).take(limit).collect();
+        let mut dtos = Vec::with_capacity(slice.len());
+        for a in slice {
+            dtos.push(artist_to_dto(&state, a).await);
+        }
+        return HttpResponse::Ok().json(ItemsResult {
+            items: dtos,
+            total_record_count: total,
+            start_index: start as i32,
+        });
+    }
+
     let limit = q.limit.unwrap_or(500).max(1);
     let offset = q.start_index.unwrap_or(0).max(0);
     let starts = q.name_starts_with.as_deref();
@@ -2256,6 +2376,90 @@ pub async fn user_played_item(
     _path: web::Path<(String, String)>,
 ) -> HttpResponse {
     HttpResponse::NoContent().finish()
+}
+
+// ── Favorites ───────────────────────────────────────────────────────────────
+//
+// Spec (Jellyfin OpenAPI, UserLibrary tag):
+//   POST   /UserFavoriteItems/{itemId}?userId=…   → UserItemDataDto
+//   DELETE /UserFavoriteItems/{itemId}?userId=…   → UserItemDataDto
+//
+// Older clients still hit the legacy per-user variant:
+//   POST   /Users/{userId}/FavoriteItems/{itemId} → UserItemDataDto
+//   DELETE /Users/{userId}/FavoriteItems/{itemId} → UserItemDataDto
+//
+// Both mutate a single row in the `starred` sidecar. smolsonic is
+// single-user, so the `userId` param is accepted but not consulted — the
+// favorite is scoped to the sole account.
+
+/// Resolve the Jellyfin GUID at the end of the path back to a native id and
+/// its kind. Returns 404 if the GUID isn't in `jf_guids`.
+async fn favorite_native(
+    state: &JellyfinState,
+    item_guid: &str,
+) -> Result<(String, String), HttpResponse> {
+    let g = mapping::normalize_guid(item_guid);
+    match resolve_native(state, &g).await {
+        Some(pair) => Ok(pair),
+        None => Err(HttpResponse::NotFound().finish()),
+    }
+}
+
+async fn set_favorite(
+    state: web::Data<JellyfinState>,
+    item_guid: String,
+    starred: bool,
+) -> HttpResponse {
+    let (_kind, native) = match favorite_native(&state, &item_guid).await {
+        Ok(pair) => pair,
+        Err(resp) => return resp,
+    };
+    let now = now_iso();
+    let result = if starred {
+        repo::star(&state.pool, &native, &now).await
+    } else {
+        repo::unstar(&state.pool, &native).await
+    };
+    if let Err(e) = result {
+        tracing::error!("jellyfin: favorite mutation on {native}: {e}");
+        return HttpResponse::InternalServerError().finish();
+    }
+    let dashed = mapping::normalize_guid(&item_guid);
+    HttpResponse::Ok().json(user_data_for(dashed, starred))
+}
+
+pub async fn add_favorite_item(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    set_favorite(state, path.into_inner(), true).await
+}
+
+pub async fn remove_favorite_item(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    set_favorite(state, path.into_inner(), false).await
+}
+
+pub async fn add_user_favorite_item(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<(String, String)>,
+) -> HttpResponse {
+    let (_user_id, item_id) = path.into_inner();
+    set_favorite(state, item_id, true).await
+}
+
+pub async fn remove_user_favorite_item(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<(String, String)>,
+) -> HttpResponse {
+    let (_user_id, item_id) = path.into_inner();
+    set_favorite(state, item_id, false).await
 }
 
 // ── Misc stubs that some clients probe ──────────────────────────────────────

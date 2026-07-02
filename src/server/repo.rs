@@ -713,6 +713,51 @@ pub async fn starred_artists(pool: &Db) -> Result<Vec<(Artist, String)>> {
     Ok(out)
 }
 
+pub async fn starred_videos(pool: &Db) -> Result<Vec<(Video, String)>> {
+    let pairs: Vec<(String, String)> = sqlx::query_as(
+        "SELECT st.id, st.starred_at FROM starred st
+         INNER JOIN videos v ON v.id = st.id
+         ORDER BY st.starred_at DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut out = Vec::with_capacity(pairs.len());
+    for (id, when) in pairs {
+        if let Some(v) = find_video(pool, &id).await? {
+            out.push((v, when));
+        }
+    }
+    Ok(out)
+}
+
+pub async fn starred_playlists(pool: &Db) -> Result<Vec<(Playlist, String)>> {
+    let pairs: Vec<(String, String)> = sqlx::query_as(
+        "SELECT st.id, st.starred_at FROM starred st
+         INNER JOIN playlists p ON p.id = st.id
+         ORDER BY st.starred_at DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut out = Vec::with_capacity(pairs.len());
+    for (id, when) in pairs {
+        if let Some(p) = find_playlist(pool, &id).await? {
+            out.push((p, when));
+        }
+    }
+    Ok(out)
+}
+
+/// True iff `native_id` is present in the `starred` table. Cheap lookup —
+/// safe to call from every `*_to_dto` helper so `UserItemDataDto.IsFavorite`
+/// reflects real state.
+pub async fn is_starred(pool: &Db, native_id: &str) -> Result<bool> {
+    let row: Option<(String,)> = sqlx::query_as("SELECT id FROM starred WHERE id = ?1 LIMIT 1")
+        .bind(native_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.is_some())
+}
+
 // ── Playlists ─────────────────────────────────────────────────────────────────
 
 pub async fn all_playlists(pool: &Db) -> Result<Vec<Playlist>> {
