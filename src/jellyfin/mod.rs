@@ -2,6 +2,7 @@ pub mod auth;
 pub mod discovery;
 pub mod dto;
 pub mod handlers;
+pub mod lyrics;
 pub mod mapping;
 
 use crate::config::JellyfinConfig;
@@ -341,6 +342,30 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .route(
             "/Audio/{id}/universal",
             web::head().to(handlers::audio_universal),
+        )
+        // Lyric — modelled after the Jellyfin OpenAPI Lyric tag. The
+        // `/RemoteSearch` variants must precede the plain `/Audio/{id}/Lyrics`
+        // so actix binds the longer path first.
+        .route(
+            "/Audio/{id}/RemoteSearch/Lyrics/{lyricId}",
+            web::post().to(handlers::download_remote_lyric),
+        )
+        .route(
+            "/Audio/{id}/RemoteSearch/Lyrics",
+            web::get().to(handlers::remote_search_lyrics),
+        )
+        .route("/Audio/{id}/Lyrics", web::get().to(handlers::get_lyrics))
+        .route(
+            "/Audio/{id}/Lyrics",
+            web::post().to(handlers::upload_lyrics),
+        )
+        .route(
+            "/Audio/{id}/Lyrics",
+            web::delete().to(handlers::delete_lyrics),
+        )
+        .route(
+            "/Providers/Lyrics/{lyricId}",
+            web::get().to(handlers::get_remote_lyric),
         )
         // Video stream
         .route("/Videos/{id}/stream", web::get().to(handlers::video_stream))
@@ -1822,6 +1847,178 @@ mod tests {
             format!("/Songs/{bogus}/InstantMix"),
             format!("/Playlists/{bogus}/InstantMix"),
             format!("/Items/{bogus}/InstantMix"),
+        ] {
+            let req = test::TestRequest::get()
+                .uri(&uri)
+                .insert_header(("X-Emby-Token", token.clone()))
+                .to_request();
+            assert_eq!(
+                test::call_service(&app, req).await.status(),
+                StatusCode::NOT_FOUND,
+                "expected 404 for {uri}"
+            );
+        }
+    }
+
+    /// End-to-end for the Lyric API modelled after the Jellyfin OpenAPI
+    /// Lyric tag: GET on missing sidecar → 404; POST synced LRC round-trips;
+    /// POST plain text → IsSynced=false; DELETE removes it; RemoteSearch
+    /// returns [] and the download/preview stubs 404.
+    #[actix_web::test]
+    async fn lyrics_roundtrip_sidecar_and_remote_stubs() {
+        let dir = tempdir();
+        let state = fixture_state(&dir, &dir, false).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(configure_routes),
+        )
+        .await;
+
+        // Authenticate.
+        let req = test::TestRequest::post()
+            .uri("/Users/AuthenticateByName")
+            .insert_header((
+                "X-Emby-Authorization",
+                r#"MediaBrowser Client="t", Device="d", DeviceId="i", Version="v""#,
+            ))
+            .set_json(serde_json::json!({"Username":"alice","Pw":"secret"}))
+            .to_request();
+        let auth_body: Value = test::call_and_read_body_json(&app, req).await;
+        let token = auth_body["AccessToken"].as_str().unwrap().to_string();
+
+        // Discover the song's Jellyfin GUID.
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=Audio")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let songs: Value = test::call_and_read_body_json(&app, req).await;
+        let song_id = songs["Items"][0]["Id"].as_str().unwrap().to_string();
+
+        // Fresh song → no sidecar yet → GET returns 404.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Audio/{song_id}/Lyrics"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NOT_FOUND
+        );
+
+        // POST a synced LRC — server persists it as `song.lrc` next to
+        // `song.mp3` and echoes the parsed DTO.
+        let lrc = "\
+[ar:Test Artist]
+[al:Test Album]
+[ti:Test Song]
+[length:01:00]
+[00:12.34]First line
+[00:16.78]Second line
+";
+        let req = test::TestRequest::post()
+            .uri(&format!("/Audio/{song_id}/Lyrics?fileName=song.lrc"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .set_payload(lrc.as_bytes().to_vec())
+            .to_request();
+        let posted: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(posted["Metadata"]["Artist"], "Test Artist");
+        assert_eq!(posted["Metadata"]["Album"], "Test Album");
+        assert_eq!(posted["Metadata"]["Title"], "Test Song");
+        assert_eq!(posted["Metadata"]["IsSynced"], true);
+        assert_eq!(posted["Metadata"]["Length"], 600_000_000_i64);
+        assert_eq!(posted["Lyrics"][0]["Text"], "First line");
+        assert_eq!(posted["Lyrics"][0]["Start"], 123_400_000_i64);
+        assert_eq!(posted["Lyrics"][1]["Text"], "Second line");
+        assert_eq!(posted["Lyrics"][1]["Start"], 167_800_000_i64);
+
+        // Sidecar file was written to disk.
+        assert!(dir.join("song.lrc").exists());
+
+        // Subsequent GET returns the same parsed body.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Audio/{song_id}/Lyrics"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let got: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(got["Metadata"]["IsSynced"], true);
+        assert_eq!(got["Lyrics"][0]["Start"], 123_400_000_i64);
+
+        // POST plain text (unsynced) — IsSynced=false, Start=null.
+        let plain = "Verse one\nVerse two\n";
+        let req = test::TestRequest::post()
+            .uri(&format!("/Audio/{song_id}/Lyrics?fileName=song.lrc"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .set_payload(plain.as_bytes().to_vec())
+            .to_request();
+        let posted: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(posted["Metadata"]["IsSynced"], false);
+        assert_eq!(posted["Lyrics"][0]["Text"], "Verse one");
+        assert!(posted["Lyrics"][0]["Start"].is_null());
+
+        // RemoteSearch returns an empty array (no provider configured).
+        let req = test::TestRequest::get()
+            .uri(&format!("/Audio/{song_id}/RemoteSearch/Lyrics"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let hits: Value = test::call_and_read_body_json(&app, req).await;
+        assert!(hits.as_array().unwrap().is_empty());
+
+        // Download-remote and provider-preview are 404 (no provider).
+        for uri in [
+            format!("/Audio/{song_id}/RemoteSearch/Lyrics/some-lyric-id"),
+            "/Providers/Lyrics/some-lyric-id".to_string(),
+        ] {
+            let method = if uri.contains("RemoteSearch") {
+                actix_web::http::Method::POST
+            } else {
+                actix_web::http::Method::GET
+            };
+            let req = test::TestRequest::default()
+                .method(method)
+                .uri(&uri)
+                .insert_header(("X-Emby-Token", token.clone()))
+                .to_request();
+            assert_eq!(
+                test::call_service(&app, req).await.status(),
+                StatusCode::NOT_FOUND,
+                "expected 404 for {uri}"
+            );
+        }
+
+        // DELETE removes the sidecar; subsequent GET 404s.
+        let req = test::TestRequest::delete()
+            .uri(&format!("/Audio/{song_id}/Lyrics"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NO_CONTENT
+        );
+        assert!(!dir.join("song.lrc").exists());
+        let req = test::TestRequest::get()
+            .uri(&format!("/Audio/{song_id}/Lyrics"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NOT_FOUND
+        );
+
+        // DELETE again — no sidecar, still 204 (idempotent).
+        let req = test::TestRequest::delete()
+            .uri(&format!("/Audio/{song_id}/Lyrics"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NO_CONTENT
+        );
+
+        // Unknown GUID → 404 on every write path.
+        let bogus = "00000000-0000-0000-0000-000000000000";
+        for uri in [
+            format!("/Audio/{bogus}/Lyrics"),
+            format!("/Audio/{bogus}/RemoteSearch/Lyrics"),
         ] {
             let req = test::TestRequest::get()
                 .uri(&uri)

@@ -529,3 +529,49 @@ pub struct PlaybackInfoResponse {
 pub struct PlaylistCreationResult {
     pub id: String,
 }
+
+// ── Lyric ────────────────────────────────────────────────────────────────────
+
+/// `LyricLine` — one lyric line, optionally time-aligned (in 100-ns ticks
+/// from the start of the track).
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "PascalCase")]
+pub struct LyricLine {
+    pub text: String,
+    pub start: Option<i64>,
+}
+
+/// `LyricMetadata` — the LRC header tags (`[ar:]`, `[al:]`, `[ti:]`, `[au:]`,
+/// `[length:]`, `[by:]`, `[offset:]`, `[re:]`, `[ve:]`) plus `IsSynced`
+/// (true iff at least one line carries a timestamp).
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "PascalCase")]
+pub struct LyricMetadata {
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub length: Option<i64>,
+    pub by: Option<String>,
+    pub offset: Option<i64>,
+    pub creator: Option<String>,
+    pub version: Option<String>,
+    pub is_synced: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct LyricDto {
+    pub metadata: LyricMetadata,
+    pub lyrics: Vec<LyricLine>,
+}
+
+/// `RemoteLyricInfoDto` — one search hit from a remote lyric provider. All
+/// three fields are required non-nullable per spec.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct RemoteLyricInfoDto {
+    pub id: String,
+    pub provider_name: String,
+    pub lyrics: LyricDto,
+}

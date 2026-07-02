@@ -2572,6 +2572,141 @@ fn serve_file(path_str: &str, content_type: &str, req: &HttpRequest) -> HttpResp
     }
 }
 
+// ── Lyric ────────────────────────────────────────────────────────────────────
+//
+// Spec (Jellyfin OpenAPI, Lyric tag):
+//   GET    /Audio/{itemId}/Lyrics                             → LyricDto
+//   POST   /Audio/{itemId}/Lyrics?fileName=…   (body text/…)  → LyricDto
+//   DELETE /Audio/{itemId}/Lyrics                             → 204
+//   GET    /Audio/{itemId}/RemoteSearch/Lyrics                → []
+//   POST   /Audio/{itemId}/RemoteSearch/Lyrics/{lyricId}      → 404
+//   GET    /Providers/Lyrics/{lyricId}                        → 404
+//
+// smolsonic reads/writes a `.lrc` sidecar next to the audio file. The three
+// remote endpoints are accepted for spec-compliance but always return
+// empty / 404 — we have no remote lyric provider.
+
+async fn audio_native_song(
+    state: &JellyfinState,
+    guid: &str,
+) -> Result<crate::models::Song, HttpResponse> {
+    let g = mapping::normalize_guid(guid);
+    let Some((kind, native)) = resolve_native(state, &g).await else {
+        return Err(HttpResponse::NotFound().finish());
+    };
+    if kind != "song" {
+        return Err(HttpResponse::NotFound().finish());
+    }
+    match repo::find_song(&state.pool, &native).await {
+        Ok(Some(s)) => Ok(s),
+        _ => Err(HttpResponse::NotFound().finish()),
+    }
+}
+
+pub async fn get_lyrics(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let song = match audio_native_song(&state, &path.into_inner()).await {
+        Ok(s) => s,
+        Err(resp) => return resp,
+    };
+    let audio_path = std::path::Path::new(&song.path);
+    let Some(sidecar) = super::lyrics::find_sidecar(audio_path) else {
+        return HttpResponse::NotFound().finish();
+    };
+    let Ok(source) = std::fs::read_to_string(&sidecar) else {
+        tracing::warn!(
+            "jellyfin: failed to read lyric sidecar {}",
+            sidecar.display()
+        );
+        return HttpResponse::NotFound().finish();
+    };
+    HttpResponse::Ok().json(super::lyrics::parse_lrc(&source))
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // `file_name` is required by the spec but we key on the audio file's stem.
+pub struct UploadLyricsQuery {
+    #[serde(default, alias = "FileName", rename = "fileName")]
+    pub file_name: Option<String>,
+}
+
+pub async fn upload_lyrics(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    _query: web::Query<UploadLyricsQuery>,
+    body: web::Bytes,
+) -> HttpResponse {
+    let song = match audio_native_song(&state, &path.into_inner()).await {
+        Ok(s) => s,
+        Err(resp) => return resp,
+    };
+    let sidecar = super::lyrics::sidecar_path(std::path::Path::new(&song.path));
+    if let Err(e) = std::fs::write(&sidecar, &body) {
+        tracing::error!("jellyfin: write lyric sidecar {}: {e}", sidecar.display());
+        return HttpResponse::InternalServerError().finish();
+    }
+    let source = String::from_utf8_lossy(&body).into_owned();
+    HttpResponse::Ok().json(super::lyrics::parse_lrc(&source))
+}
+
+pub async fn delete_lyrics(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let song = match audio_native_song(&state, &path.into_inner()).await {
+        Ok(s) => s,
+        Err(resp) => return resp,
+    };
+    let audio_path = std::path::Path::new(&song.path);
+    let Some(sidecar) = super::lyrics::find_sidecar(audio_path) else {
+        // No sidecar → treat DELETE as a success no-op. Real Jellyfin
+        // returns 204 in this case as well.
+        return HttpResponse::NoContent().finish();
+    };
+    if let Err(e) = std::fs::remove_file(&sidecar) {
+        tracing::error!("jellyfin: delete lyric sidecar {}: {e}", sidecar.display());
+        return HttpResponse::InternalServerError().finish();
+    }
+    HttpResponse::NoContent().finish()
+}
+
+/// `GET /Audio/{itemId}/RemoteSearch/Lyrics` — smolsonic has no remote
+/// provider; return an empty array so the client's "search online" button
+/// stops spinning cleanly instead of erroring.
+pub async fn remote_search_lyrics(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    // Still validate the itemId — a 404 for an unknown GUID matches how
+    // real Jellyfin behaves before it hits the provider layer.
+    match audio_native_song(&state, &path.into_inner()).await {
+        Ok(_) => HttpResponse::Ok().json(Vec::<Value>::new()),
+        Err(resp) => resp,
+    }
+}
+
+pub async fn download_remote_lyric(
+    _user: AuthedUser,
+    _state: web::Data<JellyfinState>,
+    _path: web::Path<(String, String)>,
+) -> HttpResponse {
+    HttpResponse::NotFound().finish()
+}
+
+pub async fn get_remote_lyric(
+    _user: AuthedUser,
+    _state: web::Data<JellyfinState>,
+    _path: web::Path<String>,
+) -> HttpResponse {
+    HttpResponse::NotFound().finish()
+}
+
 // ── Video stream ─────────────────────────────────────────────────────────────
 
 async fn video_by_guid(state: &JellyfinState, guid: &str, req: &HttpRequest) -> HttpResponse {
