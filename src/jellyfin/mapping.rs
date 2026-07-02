@@ -10,6 +10,7 @@ pub const KIND_VIDEO: &str = "video";
 pub const KIND_PLAYLIST: &str = "playlist";
 pub const KIND_LIBRARY: &str = "library";
 pub const KIND_USER: &str = "user";
+pub const KIND_GENRE: &str = "genre";
 
 /// Stable per (kind, native_id) GUID, formatted as a dashed UUID
 /// (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`). Jellyfin clients built on the
@@ -133,6 +134,29 @@ pub fn playlists_library_guid() -> String {
 
 pub fn user_guid(username: &str) -> String {
     guid(KIND_USER, username)
+}
+
+/// Deterministic GUID for a music genre by name (case-insensitive so
+/// clients can round-trip either casing). Genres don't live in a table —
+/// they're derived from `songs.genre` — so this is our stable id.
+pub fn genre_guid(name: &str) -> String {
+    guid(KIND_GENRE, &name.to_ascii_lowercase())
+}
+
+/// Persist the (guid → genre_name) pair so `resolve_native` can reverse it
+/// back to the exact-cased genre name later. Cheap upsert.
+pub async fn remember_genre(pool: &Db, name: &str) -> Result<String> {
+    let g = genre_guid(name);
+    sqlx::query(
+        "INSERT INTO jf_guids (guid, kind, native_id) VALUES (?1, ?2, ?3)
+         ON CONFLICT(guid) DO NOTHING",
+    )
+    .bind(&g)
+    .bind(KIND_GENRE)
+    .bind(name)
+    .execute(pool)
+    .await?;
+    Ok(g)
 }
 
 #[cfg(test)]

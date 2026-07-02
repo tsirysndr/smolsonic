@@ -245,6 +245,11 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             "/Items/{id}/RemoteImages",
             web::get().to(handlers::remote_images),
         )
+        // Filter — modelled after the Jellyfin OpenAPI Filter tag. Backs
+        // the filter/sort dropdown in Findroid / Streamyfin. MUST come
+        // before `/Items/{id}` or actix captures "Filters" as an id.
+        .route("/Items/Filters", web::get().to(handlers::items_filters))
+        .route("/Items/Filters2", web::get().to(handlers::items_filters2))
         .route("/Items/{id}", web::get().to(handlers::item_by_id))
         // DELETE /Items/{id} — Jellyfin uses this to delete playlists (they
         // are `BaseItem`s). Songs/albums are read-only in smolsonic and get
@@ -585,8 +590,18 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             "/Users/{id}/Views/{view}/Latest",
             web::get().to(handlers::empty_array),
         )
-        .route("/Genres", web::get().to(handlers::empty_items))
-        .route("/MusicGenres", web::get().to(handlers::empty_items))
+        // Genre + MusicGenre — modelled after the Jellyfin OpenAPI Genre /
+        // MusicGenre tags. Genres are derived from `songs.genre`; smolsonic
+        // treats /Genres and /MusicGenres identically (no non-music
+        // libraries). Segment counts differ so ordering vs `/…/{name}` is
+        // safe either way.
+        .route("/Genres", web::get().to(handlers::genres_list))
+        .route("/Genres/{name}", web::get().to(handlers::genre_by_name))
+        .route("/MusicGenres", web::get().to(handlers::genres_list))
+        .route(
+            "/MusicGenres/{name}",
+            web::get().to(handlers::genre_by_name),
+        )
         // /System/Ping is the canonical Jellyfin heartbeat — plain text body.
         .route("/System/Ping", web::get().to(handlers::system_ping))
         .route("/System/Ping", web::head().to(handlers::system_ping))
@@ -2314,5 +2329,192 @@ mod tests {
             test::call_service(&app, req).await.status(),
             StatusCode::NOT_FOUND
         );
+    }
+
+    /// Filter + Genre browsing — models both the Jellyfin OpenAPI Filter and
+    /// Genre/MusicGenre tags. Seeds a small library with a couple of genres
+    /// to verify aggregation, name-lookup, and genre-as-parent drill-down.
+    #[actix_web::test]
+    async fn filters_and_genre_browsing() {
+        let dir = tempdir();
+        let state = fixture_state(&dir, &dir, false).await;
+
+        // Add a second genre so /Items/Filters returns >1 genre.
+        sqlx::query("INSERT INTO artists (id, name, name_lower) VALUES ('ar-2','Second Artist','second artist')")
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO albums (id, title, artist, artist_id, year, cover_art)
+             VALUES ('al-2','Second Album','Second Artist','ar-2',2019,NULL)",
+        )
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        for (id, title, genre) in [
+            ("so-r1", "Rock Song", "Rock"),
+            ("so-j1", "Jazz Song", "Jazz"),
+        ] {
+            let path = dir.join(format!("{id}.mp3"));
+            let mut f = std::fs::File::create(&path).unwrap();
+            Write::write_all(&mut f, &[0u8; 4096]).unwrap();
+            sqlx::query(
+                "INSERT INTO songs (id, path, title, artist, artist_id, album, album_id, genre,
+                    track_number, disc_number, year, duration_ms, bitrate, filesize, suffix, content_type, cover_art, mtime)
+                 VALUES (?1, ?2, ?3, 'Second Artist', 'ar-2', 'Second Album', 'al-2', ?4,
+                    1, 1, 2019, 60000, 192, 4096, 'mp3', 'audio/mpeg', NULL, 0)",
+            )
+            .bind(id)
+            .bind(path.to_string_lossy().to_string())
+            .bind(title)
+            .bind(genre)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        }
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(configure_routes),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/Users/AuthenticateByName")
+            .insert_header((
+                "X-Emby-Authorization",
+                r#"MediaBrowser Client="t", Device="d", DeviceId="i", Version="v""#,
+            ))
+            .set_json(serde_json::json!({"Username":"alice","Pw":"secret"}))
+            .to_request();
+        let auth_body: Value = test::call_and_read_body_json(&app, req).await;
+        let token = auth_body["AccessToken"].as_str().unwrap().to_string();
+
+        // /Items/Filters — legacy shape: Genres[String], Years[i32].
+        let req = test::TestRequest::get()
+            .uri("/Items/Filters")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        let genres: Vec<&str> = body["Genres"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(genres.contains(&"Rock"));
+        assert!(genres.contains(&"Jazz"));
+        assert!(body["Years"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|y| y.as_i64() == Some(2019)));
+        assert!(body["Years"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|y| y.as_i64() == Some(2020)));
+        assert!(body["Tags"].as_array().unwrap().is_empty());
+        assert!(body["OfficialRatings"].as_array().unwrap().is_empty());
+
+        // /Items/Filters2 — modern shape: Genres[NameGuidPair].
+        let req = test::TestRequest::get()
+            .uri("/Items/Filters2")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        let genres = body["Genres"].as_array().unwrap();
+        assert_eq!(genres.len(), 2);
+        for g in genres {
+            assert!(g["Id"].as_str().unwrap().contains('-'));
+            assert!(!g["Name"].as_str().unwrap().is_empty());
+        }
+        assert!(body["Tags"].as_array().unwrap().is_empty());
+        assert!(body["AudioLanguages"].as_array().unwrap().is_empty());
+
+        // /Genres — list of MusicGenre BaseItems.
+        let req = test::TestRequest::get()
+            .uri("/Genres")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["TotalRecordCount"], 2);
+        let rock = body["Items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["Name"] == "Rock")
+            .unwrap();
+        assert_eq!(rock["Type"], "MusicGenre");
+        assert_eq!(rock["SongCount"], 1);
+        assert_eq!(rock["AlbumCount"], 1);
+        let rock_id = rock["Id"].as_str().unwrap().to_string();
+
+        // /MusicGenres shares the handler — same list.
+        let req = test::TestRequest::get()
+            .uri("/MusicGenres")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["TotalRecordCount"], 2);
+
+        // NameStartsWith filter on the list.
+        let req = test::TestRequest::get()
+            .uri("/Genres?NameStartsWith=R")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["TotalRecordCount"], 1);
+        assert_eq!(body["Items"][0]["Name"], "Rock");
+
+        // /Genres/Rock — single genre BaseItem, case-insensitive on the path.
+        let req = test::TestRequest::get()
+            .uri("/Genres/rock")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["Name"], "Rock");
+        assert_eq!(body["Type"], "MusicGenre");
+        assert_eq!(body["SongCount"], 1);
+
+        // /MusicGenres/{name} — same handler.
+        let req = test::TestRequest::get()
+            .uri("/MusicGenres/Jazz")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["Name"], "Jazz");
+        assert_eq!(body["SongCount"], 1);
+
+        // Unknown genre → 404.
+        let req = test::TestRequest::get()
+            .uri("/Genres/Reggae")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NOT_FOUND
+        );
+
+        // /Items?parentId=<rock_id> — drill-down lists the Rock songs.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Items?parentId={rock_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["TotalRecordCount"], 1);
+        assert_eq!(body["Items"][0]["Name"], "Rock Song");
+        assert_eq!(body["Items"][0]["Type"], "Audio");
+
+        // …and with IncludeItemTypes=MusicAlbum, deduped up to albums.
+        let req = test::TestRequest::get()
+            .uri(&format!(
+                "/Items?parentId={rock_id}&IncludeItemTypes=MusicAlbum"
+            ))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["TotalRecordCount"], 1);
+        assert_eq!(body["Items"][0]["Type"], "MusicAlbum");
     }
 }

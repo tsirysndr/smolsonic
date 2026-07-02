@@ -1040,6 +1040,47 @@ async fn items_impl(state: web::Data<JellyfinState>, q: ItemsQuery) -> HttpRespo
                         start_index: 0,
                     });
                 }
+                "genre" => {
+                    // Drill-down from `/Genres` tap. `native` is the exact-
+                    // cased genre name (we stored it in `jf_guids.native_id`).
+                    let limit = q.limit.unwrap_or(500).max(1);
+                    let offset = q.start_index.unwrap_or(0).max(0);
+                    let songs = repo::songs_by_genre(&state.pool, &native, limit, offset)
+                        .await
+                        .unwrap_or_default();
+                    // If the client asked specifically for albums, dedupe
+                    // song rows down to their albums.
+                    if includes(&q.include_item_types, "MusicAlbum") {
+                        let mut seen: std::collections::HashSet<String> =
+                            std::collections::HashSet::new();
+                        let mut dtos: Vec<BaseItemDto> = Vec::new();
+                        for s in &songs {
+                            if seen.insert(s.album_id.clone()) {
+                                if let Ok(Some(al)) =
+                                    repo::find_album(&state.pool, &s.album_id).await
+                                {
+                                    dtos.push(album_to_dto(&state, &al).await);
+                                }
+                            }
+                        }
+                        let total = dtos.len() as i32;
+                        return HttpResponse::Ok().json(ItemsResult {
+                            items: dtos,
+                            total_record_count: total,
+                            start_index: offset as i32,
+                        });
+                    }
+                    let mut dtos = Vec::with_capacity(songs.len());
+                    for s in &songs {
+                        dtos.push(song_to_dto(&state, s).await);
+                    }
+                    let total = dtos.len() as i32;
+                    return HttpResponse::Ok().json(ItemsResult {
+                        items: dtos,
+                        total_record_count: total,
+                        start_index: offset as i32,
+                    });
+                }
                 _ => {}
             }
         }
@@ -2830,6 +2871,148 @@ fn ext_for_content_type(ct: &str) -> &'static str {
         "svg"
     } else {
         "jpg"
+    }
+}
+
+// ── Filter + Genre ──────────────────────────────────────────────────────────
+//
+// Spec (Jellyfin OpenAPI, Filter + Genre + MusicGenre tags):
+//   GET /Items/Filters                → QueryFiltersLegacy
+//   GET /Items/Filters2               → QueryFilters
+//   GET /Genres                       → BaseItemDtoQueryResult
+//   GET /Genres/{genreName}           → BaseItemDto
+//   GET /MusicGenres                  → BaseItemDtoQueryResult (same shape as /Genres)
+//   GET /MusicGenres/{genreName}      → BaseItemDto
+//
+// smolsonic derives genres from `songs.genre` (no dedicated table). Filters
+// share that source; Tags / OfficialRatings / AudioLanguages /
+// SubtitleLanguages have no backing data and always come out empty.
+
+pub async fn items_filters(_user: AuthedUser, state: web::Data<JellyfinState>) -> HttpResponse {
+    let genres: Vec<String> = repo::distinct_genres(&state.pool)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(name, _, _)| name)
+        .collect();
+    let years = repo::distinct_years(&state.pool).await.unwrap_or_default();
+    HttpResponse::Ok().json(super::dto::QueryFiltersLegacy {
+        genres,
+        tags: vec![],
+        official_ratings: vec![],
+        years,
+    })
+}
+
+pub async fn items_filters2(_user: AuthedUser, state: web::Data<JellyfinState>) -> HttpResponse {
+    let mut genres: Vec<super::dto::NameGuidPair> = Vec::new();
+    for (name, _, _) in repo::distinct_genres(&state.pool).await.unwrap_or_default() {
+        let id = mapping::remember_genre(&state.pool, &name)
+            .await
+            .unwrap_or_else(|_| mapping::genre_guid(&name));
+        genres.push(super::dto::NameGuidPair {
+            name: Some(name),
+            id,
+        });
+    }
+    HttpResponse::Ok().json(super::dto::QueryFilters {
+        genres,
+        tags: vec![],
+        audio_languages: vec![],
+        subtitle_languages: vec![],
+    })
+}
+
+async fn genre_to_dto(state: &JellyfinState, name: &str) -> Option<BaseItemDto> {
+    let (real_name, song_count, album_count) = repo::find_genre_stats(&state.pool, name)
+        .await
+        .ok()
+        .flatten()?;
+    let id = mapping::remember_genre(&state.pool, &real_name)
+        .await
+        .unwrap_or_else(|_| mapping::genre_guid(&real_name));
+    Some(BaseItemDto {
+        id,
+        server_id: Some(state.server_id.clone()),
+        name: Some(real_name.clone()),
+        item_type: "MusicGenre",
+        media_type: "Unknown",
+        is_folder: Some(true),
+        sort_name: Some(real_name),
+        location_type: Some("FileSystem"),
+        song_count: Some(song_count as i32),
+        album_count: Some(album_count as i32),
+        child_count: Some(song_count as i32),
+        ..Default::default()
+    })
+}
+
+pub async fn genres_list(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let q = parse_items_query(&req);
+    let rows = repo::distinct_genres(&state.pool).await.unwrap_or_default();
+    // Apply NameStartsWith / SearchTerm from the query.
+    let filtered: Vec<(String, i64, i64)> = rows
+        .into_iter()
+        .filter(|(n, _, _)| {
+            if let Some(prefix) = q.name_starts_with.as_deref() {
+                if !n
+                    .to_ascii_lowercase()
+                    .starts_with(&prefix.to_ascii_lowercase())
+                {
+                    return false;
+                }
+            }
+            if let Some(term) = q.search_term.as_deref() {
+                if !n.to_ascii_lowercase().contains(&term.to_ascii_lowercase()) {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+    let total = filtered.len() as i32;
+    let start = q.start_index.unwrap_or(0).max(0) as usize;
+    let take = q.limit.map(|n| n.max(1) as usize).unwrap_or(usize::MAX);
+    let mut dtos: Vec<BaseItemDto> = Vec::new();
+    for (name, song_count, album_count) in filtered.into_iter().skip(start).take(take) {
+        let id = mapping::remember_genre(&state.pool, &name)
+            .await
+            .unwrap_or_else(|_| mapping::genre_guid(&name));
+        dtos.push(BaseItemDto {
+            id,
+            server_id: Some(state.server_id.clone()),
+            name: Some(name.clone()),
+            item_type: "MusicGenre",
+            media_type: "Unknown",
+            is_folder: Some(true),
+            sort_name: Some(name),
+            location_type: Some("FileSystem"),
+            song_count: Some(song_count as i32),
+            album_count: Some(album_count as i32),
+            child_count: Some(song_count as i32),
+            ..Default::default()
+        });
+    }
+    HttpResponse::Ok().json(ItemsResult {
+        items: dtos,
+        total_record_count: total,
+        start_index: start as i32,
+    })
+}
+
+pub async fn genre_by_name(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let name = path.into_inner();
+    match genre_to_dto(&state, &name).await {
+        Some(dto) => HttpResponse::Ok().json(dto),
+        None => HttpResponse::NotFound().finish(),
     }
 }
 

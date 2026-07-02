@@ -615,3 +615,37 @@ pub struct ImageProviderInfo {
     pub name: String,
     pub supported_images: Vec<&'static str>,
 }
+
+// ── Filter ──────────────────────────────────────────────────────────────────
+
+/// `NameValuePair` — used inside `QueryFilters` for audio/subtitle language
+/// lists. Both fields are nullable per spec.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct NameValuePair {
+    pub name: Option<String>,
+    pub value: Option<String>,
+}
+
+/// Response body for `GET /Items/Filters`. Older client target — everything
+/// is a flat string / integer list.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct QueryFiltersLegacy {
+    pub genres: Vec<String>,
+    pub tags: Vec<String>,
+    pub official_ratings: Vec<String>,
+    pub years: Vec<i32>,
+}
+
+/// Response body for `GET /Items/Filters2`. Newer client target — genres are
+/// `NameGuidPair` so the client can construct `?parentId=<genre_guid>` to
+/// drill down.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct QueryFilters {
+    pub genres: Vec<NameGuidPair>,
+    pub tags: Vec<String>,
+    pub audio_languages: Vec<NameValuePair>,
+    pub subtitle_languages: Vec<NameValuePair>,
+}

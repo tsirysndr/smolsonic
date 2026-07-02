@@ -636,6 +636,37 @@ pub async fn distinct_genres(pool: &Db) -> Result<Vec<(String, i64, i64)>> {
     Ok(rows)
 }
 
+/// Per-genre stats for the `/Genres/{name}` and `/MusicGenres/{name}`
+/// endpoints. Returns `None` when no songs carry that genre. Case-insensitive
+/// match to be forgiving of client input.
+pub async fn find_genre_stats(pool: &Db, name: &str) -> Result<Option<(String, i64, i64)>> {
+    let row: Option<(String, i64, i64)> = sqlx::query_as(
+        "SELECT genre, COUNT(*) AS song_count,
+                (SELECT COUNT(DISTINCT s2.album_id) FROM songs s2 WHERE s2.genre = songs.genre COLLATE NOCASE) AS album_count
+         FROM songs WHERE genre = ?1 COLLATE NOCASE
+         GROUP BY genre LIMIT 1",
+    )
+    .bind(name)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Distinct non-zero years across songs + albums for the legacy
+/// `QueryFiltersLegacy.Years` field. Sorted ascending.
+pub async fn distinct_years(pool: &Db) -> Result<Vec<i32>> {
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        "SELECT DISTINCT year FROM (
+            SELECT year FROM songs WHERE year IS NOT NULL AND year > 0
+            UNION
+            SELECT year FROM albums WHERE year > 0
+         ) ORDER BY year",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(y,)| y as i32).collect())
+}
+
 /// Random `size` songs whose native artist_id matches. Backs the artist /
 /// album / song seeds in `/…/InstantMix` — each seed narrows to the artist,
 /// then falls back to genre/random filler in the handler.
