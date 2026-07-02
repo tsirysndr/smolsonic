@@ -39,3 +39,6 @@ notify-debouncer-full = "0.7"
 mdns-sd = "0.13"
 if-addrs = "0.13"
 rust-embed = { version = "8", features = ["interpolate-folder-path"] }
+# HTTP client for optional Last.fm / MusicBrainz similarity plugins. rustls
+# so we don't take a system OpenSSL dep on cross-builds.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

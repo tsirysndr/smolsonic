@@ -2318,6 +2318,232 @@ pub async fn item_instant_mix(
     }
 }
 
+// ── Similar ─────────────────────────────────────────────────────────────────
+//
+// Spec (Jellyfin OpenAPI, Library tag): six endpoints — /Albums, /Artists,
+// /Movies, /Trailers, /Shows, /Items — each returning a
+// `BaseItemDtoQueryResult` of items similar to the seed.
+//
+// Similarity is delegated to the Last.fm + MusicBrainz plugins in
+// `similar::SimilarProviders`. Neither is required — when both are absent
+// (no `[lastfm]` or `[musicbrainz]` block in the config), every Similar
+// endpoint short-circuits to an empty result. Movie/Trailer/Shows never
+// consult a provider (Last.fm and MB are music-only) and always return
+// empty regardless.
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // `user_id` and `fields` are accepted for spec-compliance but not consulted.
+pub struct SimilarQuery {
+    #[serde(default, alias = "Limit")]
+    pub limit: Option<i64>,
+    #[serde(default, alias = "ExcludeArtistIds")]
+    pub exclude_artist_ids: Option<String>,
+    #[serde(default, alias = "UserId", rename = "userId")]
+    pub user_id: Option<String>,
+    #[serde(default, alias = "Fields")]
+    pub fields: Option<String>,
+}
+
+fn similar_limit(q: &SimilarQuery) -> usize {
+    q.limit.unwrap_or(12).max(1) as usize
+}
+
+/// Parse `excludeArtistIds=<guid>,<guid>` into the set of *native* artist
+/// ids we should drop from the result. Unknown GUIDs are silently ignored.
+async fn resolve_exclude_artists(state: &JellyfinState, csv: Option<&str>) -> Vec<String> {
+    let Some(csv) = csv else { return Vec::new() };
+    let mut out: Vec<String> = Vec::new();
+    for raw in csv.split(',') {
+        let g = mapping::normalize_guid(raw.trim());
+        if let Some((kind, native)) = resolve_native(state, &g).await {
+            if kind == "artist" {
+                out.push(native);
+            }
+        }
+    }
+    out
+}
+
+/// Resolve provider-returned artist names back to library `Artist` rows via
+/// case-insensitive name match. Drops names we don't have.
+async fn library_artists_by_name(
+    state: &JellyfinState,
+    names: &[String],
+    exclude_artist_ids: &[String],
+) -> Vec<crate::models::Artist> {
+    if names.is_empty() {
+        return Vec::new();
+    }
+    let all = repo::all_artists(&state.pool).await.unwrap_or_default();
+    let lower_index: std::collections::HashMap<String, crate::models::Artist> = all
+        .into_iter()
+        .map(|a| (a.name.to_ascii_lowercase(), a))
+        .collect();
+    let mut out = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for name in names {
+        if let Some(a) = lower_index.get(&name.to_ascii_lowercase()) {
+            if exclude_artist_ids.contains(&a.id) {
+                continue;
+            }
+            if seen.insert(a.id.clone()) {
+                out.push(a.clone());
+            }
+        }
+    }
+    out
+}
+
+async fn empty_items_result() -> HttpResponse {
+    HttpResponse::Ok().json(ItemsResult {
+        items: vec![],
+        total_record_count: 0,
+        start_index: 0,
+    })
+}
+
+pub async fn album_similar(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    query: web::Query<SimilarQuery>,
+) -> HttpResponse {
+    let g = mapping::normalize_guid(&path.into_inner());
+    let Some((kind, native)) = resolve_native(&state, &g).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    if kind != "album" {
+        return HttpResponse::NotFound().finish();
+    }
+    let Ok(Some(seed_album)) = repo::find_album(&state.pool, &native).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    if !state.similar.any_enabled() {
+        return empty_items_result().await;
+    }
+
+    let q = query.into_inner();
+    let limit = similar_limit(&q);
+    let exclude = resolve_exclude_artists(&state, q.exclude_artist_ids.as_deref()).await;
+    let names = state
+        .similar
+        .similar_artist_names(&state.pool, &seed_album.artist_id, &seed_album.artist)
+        .await;
+    let similar_artists = library_artists_by_name(&state, &names, &exclude).await;
+
+    // For each similar artist, collect their albums. Skip the seed album
+    // itself even though it shouldn't appear (safety belt).
+    let mut dtos: Vec<BaseItemDto> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    seen.insert(seed_album.id.clone());
+    for artist in similar_artists {
+        if dtos.len() >= limit {
+            break;
+        }
+        let albums = repo::albums_by_artist(&state.pool, &artist.id)
+            .await
+            .unwrap_or_default();
+        for al in albums {
+            if dtos.len() >= limit {
+                break;
+            }
+            if seen.insert(al.id.clone()) {
+                dtos.push(album_to_dto(&state, &al).await);
+            }
+        }
+    }
+    let total = dtos.len() as i32;
+    HttpResponse::Ok().json(ItemsResult {
+        items: dtos,
+        total_record_count: total,
+        start_index: 0,
+    })
+}
+
+pub async fn artist_similar(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    query: web::Query<SimilarQuery>,
+) -> HttpResponse {
+    let g = mapping::normalize_guid(&path.into_inner());
+    let Some((kind, native)) = resolve_native(&state, &g).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    if kind != "artist" {
+        return HttpResponse::NotFound().finish();
+    }
+    let Ok(Some(seed)) = repo::find_artist(&state.pool, &native).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    if !state.similar.any_enabled() {
+        return empty_items_result().await;
+    }
+
+    let q = query.into_inner();
+    let limit = similar_limit(&q);
+    let mut exclude = resolve_exclude_artists(&state, q.exclude_artist_ids.as_deref()).await;
+    // Always exclude the seed itself.
+    exclude.push(seed.id.clone());
+
+    let names = state
+        .similar
+        .similar_artist_names(&state.pool, &seed.id, &seed.name)
+        .await;
+    let mut library = library_artists_by_name(&state, &names, &exclude).await;
+    library.truncate(limit);
+
+    let mut dtos = Vec::with_capacity(library.len());
+    for a in &library {
+        dtos.push(artist_to_dto(&state, a).await);
+    }
+    let total = dtos.len() as i32;
+    HttpResponse::Ok().json(ItemsResult {
+        items: dtos,
+        total_record_count: total,
+        start_index: 0,
+    })
+}
+
+/// `GET /Movies/{id}/Similar`, `/Trailers/{id}/Similar`, `/Shows/{id}/Similar`.
+/// Last.fm / MusicBrainz are music-only, so the video/TV variants have
+/// nothing to consult and always return an empty result. We still validate
+/// the item id — a 404 for unknown GUIDs matches spec.
+pub async fn video_similar(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    _query: web::Query<SimilarQuery>,
+) -> HttpResponse {
+    let g = mapping::normalize_guid(&path.into_inner());
+    match resolve_native(&state, &g).await {
+        Some(_) => empty_items_result().await,
+        None => HttpResponse::NotFound().finish(),
+    }
+}
+
+/// `GET /Items/{id}/Similar` — dispatch by kind. Songs, playlists and other
+/// kinds not covered above respond with an empty result.
+pub async fn item_similar(
+    user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    query: web::Query<SimilarQuery>,
+) -> HttpResponse {
+    let raw = path.into_inner();
+    let g = mapping::normalize_guid(&raw);
+    let Some((kind, _native)) = resolve_native(&state, &g).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    let path = web::Path::from(raw);
+    match kind.as_str() {
+        "album" => album_similar(user, state, path, query).await,
+        "artist" => artist_similar(user, state, path, query).await,
+        "video" => video_similar(user, state, path, query).await,
+        _ => empty_items_result().await,
+    }
+}
+
 // ── Images ───────────────────────────────────────────────────────────────────
 
 fn cover_path_for(state: &JellyfinState, filename: &str) -> PathBuf {

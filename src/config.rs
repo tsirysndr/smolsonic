@@ -25,6 +25,25 @@ pub struct Config {
     pub video: Option<VideoConfig>,
     #[serde(default)]
     pub mdns: MdnsConfig,
+    /// Optional Last.fm plugin. Enabled only when the block exists and
+    /// `api_key` is set — powers `/…/Similar` via `artist.getSimilar`.
+    #[serde(default)]
+    pub lastfm: Option<LastfmConfig>,
+    /// Optional MusicBrainz plugin. Enabled only when the block exists and
+    /// `user_agent` is set (MB's TOS requires a descriptive UA per app).
+    /// Supplements Last.fm with band-member / collaborator links.
+    #[serde(default)]
+    pub musicbrainz: Option<MusicbrainzConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LastfmConfig {
+    pub api_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MusicbrainzConfig {
+    pub user_agent: String,
 }
 
 /// Optional video library. Enabled only when this block is present in the

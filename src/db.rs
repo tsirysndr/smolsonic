@@ -99,6 +99,18 @@ async fn migrate(pool: &Db) -> Result<()> {
             likes                   INTEGER
         );
 
+        -- Cache for the Last.fm / MusicBrainz similarity plugins. Keyed by
+        -- the native seed artist id + provider tag ("lastfm" | "musicbrainz");
+        -- payload is a JSON array of similar artist names. `fetched_at` is
+        -- ISO-8601 for a simple TTL check on read.
+        CREATE TABLE IF NOT EXISTS similar_artists_cache (
+            artist_id   TEXT NOT NULL,
+            provider    TEXT NOT NULL,
+            names_json  TEXT NOT NULL,
+            fetched_at  TEXT NOT NULL,
+            PRIMARY KEY (artist_id, provider)
+        );
+
         CREATE TABLE IF NOT EXISTS playlists (
             id          TEXT PRIMARY KEY,
             name        TEXT NOT NULL,

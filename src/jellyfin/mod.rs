@@ -4,6 +4,7 @@ pub mod dto;
 pub mod handlers;
 pub mod lyrics;
 pub mod mapping;
+pub mod similar;
 
 use crate::config::JellyfinConfig;
 use crate::db::Db;
@@ -29,6 +30,10 @@ pub struct JellyfinState {
     pub video_dir: Option<PathBuf>,
     pub music_scan_progress: Arc<ScanProgress>,
     pub video_scan_progress: Arc<VideoScanProgress>,
+    /// Optional Last.fm / MusicBrainz plugins for `/…/Similar`. Both slots
+    /// are `None` when their `[lastfm]` / `[musicbrainz]` blocks are absent
+    /// — the Similar handlers short-circuit to empty in that case.
+    pub similar: Arc<similar::SimilarProviders>,
 }
 
 pub async fn start(
@@ -40,12 +45,24 @@ pub async fn start(
     covers_dir: PathBuf,
     video_library_name: Option<String>,
     video_dir: Option<PathBuf>,
+    lastfm: Option<crate::config::LastfmConfig>,
+    musicbrainz: Option<crate::config::MusicbrainzConfig>,
     music_scan_progress: Arc<ScanProgress>,
     video_scan_progress: Arc<VideoScanProgress>,
 ) -> anyhow::Result<()> {
     let server_id = auth::ensure_server_id(&pool).await?;
     let user_id = mapping::user_guid(&username);
     let addr = format!("{}:{}", cfg.host, cfg.port);
+    let similar_providers = Arc::new(similar::SimilarProviders::new(
+        lastfm.as_ref(),
+        musicbrainz.as_ref(),
+    ));
+
+    tracing::info!(
+        "jellyfin similar plugins: lastfm={} musicbrainz={}",
+        similar_providers.lastfm.is_some(),
+        similar_providers.musicbrainz.is_some(),
+    );
 
     let state = web::Data::new(JellyfinState {
         pool,
@@ -62,6 +79,7 @@ pub async fn start(
         video_dir,
         music_scan_progress,
         video_scan_progress,
+        similar: similar_providers,
     });
 
     tracing::info!(
@@ -176,7 +194,12 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             "/Items/{id}/Ancestors",
             web::get().to(handlers::empty_array),
         )
-        .route("/Items/{id}/Similar", web::get().to(handlers::empty_items))
+        // Similar — modelled after the Jellyfin OpenAPI Library tag.
+        // Powered by the Last.fm / MusicBrainz plugins when enabled;
+        // returns empty results when neither token is configured. The
+        // per-kind paths MUST come before their parent catch-alls
+        // (/Items/{id}, /Artists/{name}, /Playlists/{id}).
+        .route("/Items/{id}/Similar", web::get().to(handlers::item_similar))
         .route(
             "/Users/{uid}/Items/{id}/Intros",
             web::get().to(handlers::empty_items),
@@ -256,6 +279,18 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .route("/Shows/Upcoming", web::get().to(handlers::empty_items))
         .route("/Shows/{id}/Episodes", web::get().to(handlers::empty_items))
         .route("/Shows/{id}/Seasons", web::get().to(handlers::empty_items))
+        .route(
+            "/Shows/{id}/Similar",
+            web::get().to(handlers::video_similar),
+        )
+        .route(
+            "/Movies/{id}/Similar",
+            web::get().to(handlers::video_similar),
+        )
+        .route(
+            "/Trailers/{id}/Similar",
+            web::get().to(handlers::video_similar),
+        )
         // Artists
         .route("/Artists", web::get().to(handlers::artists))
         .route("/Artists/AlbumArtists", web::get().to(handlers::artists))
@@ -273,8 +308,16 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             web::get().to(handlers::artist_instant_mix),
         )
         .route(
+            "/Artists/{id}/Similar",
+            web::get().to(handlers::artist_similar),
+        )
+        .route(
             "/Albums/{id}/InstantMix",
             web::get().to(handlers::album_instant_mix),
+        )
+        .route(
+            "/Albums/{id}/Similar",
+            web::get().to(handlers::album_similar),
         )
         .route(
             "/Songs/{id}/InstantMix",
@@ -623,6 +666,7 @@ mod tests {
             },
             music_scan_progress: Arc::new(ScanProgress::default()),
             video_scan_progress: Arc::new(VideoScanProgress::default()),
+            similar: Arc::new(similar::SimilarProviders::new(None, None)),
         }
     }
 
@@ -2019,6 +2063,100 @@ mod tests {
         for uri in [
             format!("/Audio/{bogus}/Lyrics"),
             format!("/Audio/{bogus}/RemoteSearch/Lyrics"),
+        ] {
+            let req = test::TestRequest::get()
+                .uri(&uri)
+                .insert_header(("X-Emby-Token", token.clone()))
+                .to_request();
+            assert_eq!(
+                test::call_service(&app, req).await.status(),
+                StatusCode::NOT_FOUND,
+                "expected 404 for {uri}"
+            );
+        }
+    }
+
+    /// Similar API — with neither Last.fm nor MusicBrainz configured, every
+    /// endpoint returns an empty `ItemsResult`. The fixture doesn't set
+    /// tokens so this exercises the plugin-disabled path. Movie/Trailer/
+    /// Shows always return empty regardless.
+    #[actix_web::test]
+    async fn similar_returns_empty_when_no_plugin_tokens_configured() {
+        let dir = tempdir();
+        let state = fixture_state(&dir, &dir, true).await;
+        assert!(!state.similar.any_enabled(), "fixture must have no plugins");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(configure_routes),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/Users/AuthenticateByName")
+            .insert_header((
+                "X-Emby-Authorization",
+                r#"MediaBrowser Client="t", Device="d", DeviceId="i", Version="v""#,
+            ))
+            .set_json(serde_json::json!({"Username":"alice","Pw":"secret"}))
+            .to_request();
+        let auth_body: Value = test::call_and_read_body_json(&app, req).await;
+        let token = auth_body["AccessToken"].as_str().unwrap().to_string();
+
+        // Discover the artist / album / video GUIDs.
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=MusicArtist")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let artists: Value = test::call_and_read_body_json(&app, req).await;
+        let artist_id = artists["Items"][0]["Id"].as_str().unwrap().to_string();
+
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=MusicAlbum")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let albums: Value = test::call_and_read_body_json(&app, req).await;
+        let album_id = albums["Items"][0]["Id"].as_str().unwrap().to_string();
+
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=Movie")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let movies: Value = test::call_and_read_body_json(&app, req).await;
+        let movie_id = movies["Items"][0]["Id"].as_str().unwrap().to_string();
+
+        // Album / Artist similarity: plugins disabled → empty.
+        for uri in [
+            format!("/Albums/{album_id}/Similar"),
+            format!("/Artists/{artist_id}/Similar"),
+            format!("/Items/{album_id}/Similar"),
+            format!("/Items/{artist_id}/Similar"),
+        ] {
+            let req = test::TestRequest::get()
+                .uri(&uri)
+                .insert_header(("X-Emby-Token", token.clone()))
+                .to_request();
+            let body: Value = test::call_and_read_body_json(&app, req).await;
+            assert_eq!(body["TotalRecordCount"], 0, "{uri}");
+            assert!(body["Items"].as_array().unwrap().is_empty(), "{uri}");
+        }
+
+        // Movies / Trailers / Shows always empty (no music-similarity to
+        // consult — provider status doesn't matter).
+        let req = test::TestRequest::get()
+            .uri(&format!("/Movies/{movie_id}/Similar"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["TotalRecordCount"], 0);
+
+        // Unknown GUID → 404 on album / artist / movie variants.
+        let bogus = "00000000-0000-0000-0000-000000000000";
+        for uri in [
+            format!("/Albums/{bogus}/Similar"),
+            format!("/Artists/{bogus}/Similar"),
+            format!("/Movies/{bogus}/Similar"),
+            format!("/Items/{bogus}/Similar"),
         ] {
             let req = test::TestRequest::get()
                 .uri(&uri)

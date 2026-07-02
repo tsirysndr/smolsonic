@@ -173,6 +173,8 @@ async fn main() -> Result<()> {
                 let jf_cfg_c = jf_cfg.clone();
                 let video_library_name = cfg.video.as_ref().map(|v| v.library_name.clone());
                 let video_dir = cfg.video.as_ref().map(|v| v.video_dir.clone());
+                let lastfm = cfg.lastfm.clone();
+                let musicbrainz = cfg.musicbrainz.clone();
                 let music_progress = scan_progress.clone();
                 let video_progress = video_scan_progress.clone();
                 actix_web::rt::spawn(async move {
@@ -185,6 +187,8 @@ async fn main() -> Result<()> {
                         covers_dir,
                         video_library_name,
                         video_dir,
+                        lastfm,
+                        musicbrainz,
                         music_progress,
                         video_progress,
                     )

@@ -28,3 +28,15 @@ scan_interval_secs = 300
 # port = 9000
 # access_key = "smolsonic"
 # secret_key = "changeme-please"
+
+# Optional Last.fm plugin. Powers the "Similar" rails on album/artist detail
+# pages via artist.getSimilar. Register a free API key at last.fm/api.
+# Omit the block entirely to disable — /…/Similar returns empty in that case.
+# [lastfm]
+# api_key = "your-lastfm-api-key"
+
+# Optional MusicBrainz plugin. Supplements Last.fm with linked artists
+# (collaborators, band members). MusicBrainz requires a descriptive user
+# agent per their TOS — include app name, version, and contact info.
+# [musicbrainz]
+# user_agent = "smolsonic/0.6.3 ( you@example.com )"
