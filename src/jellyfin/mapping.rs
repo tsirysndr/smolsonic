@@ -127,6 +127,10 @@ pub fn movies_library_guid() -> String {
     guid(KIND_LIBRARY, "movies")
 }
 
+pub fn playlists_library_guid() -> String {
+    guid(KIND_LIBRARY, "playlists")
+}
+
 pub fn user_guid(username: &str) -> String {
     guid(KIND_USER, username)
 }

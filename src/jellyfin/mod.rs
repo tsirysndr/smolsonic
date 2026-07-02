@@ -722,13 +722,13 @@ mod tests {
         let auth_body: Value = test::call_and_read_body_json(&app, req).await;
         let token = auth_body["AccessToken"].as_str().unwrap().to_string();
 
-        // Views: should include both Music AND Movies libraries.
+        // Views: should include Music, Movies, and Playlists.
         let req = test::TestRequest::get()
             .uri("/Users/me/Views")
             .insert_header(("X-Emby-Token", token.clone()))
             .to_request();
         let views: Value = test::call_and_read_body_json(&app, req).await;
-        assert_eq!(views["TotalRecordCount"], 2);
+        assert_eq!(views["TotalRecordCount"], 3);
         let names: Vec<&str> = views["Items"]
             .as_array()
             .unwrap()
@@ -737,6 +737,7 @@ mod tests {
             .collect();
         assert!(names.contains(&"Music"));
         assert!(names.contains(&"Movies"));
+        assert!(names.contains(&"Playlists"));
 
         // List movies by type.
         let req = test::TestRequest::get()
@@ -948,6 +949,41 @@ mod tests {
         // Playlists surface through /Items?IncludeItemTypes=Playlist.
         let req = test::TestRequest::get()
             .uri("/Items?IncludeItemTypes=Playlist")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let list: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(list["TotalRecordCount"], 1);
+        assert_eq!(list["Items"][0]["Id"], playlist_id);
+
+        // Playlists library is one of the top-level views.
+        let req = test::TestRequest::get()
+            .uri("/Users/me/Views")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let views: Value = test::call_and_read_body_json(&app, req).await;
+        let names: Vec<&str> = views["Items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["Name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"Playlists"));
+        let playlists_lib = mapping::playlists_library_guid();
+
+        // GET /Users/{uid}/Items/{playlists_lib} returns the CollectionFolder
+        // header — Moonfin fetches this when the tile is tapped.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Users/me/Items/{playlists_lib}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["Type"], "CollectionFolder");
+        assert_eq!(body["CollectionType"], "playlists");
+        assert_eq!(body["Name"], "Playlists");
+
+        // /Items?parentId=<playlists_lib> lists the playlists.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Items?parentId={playlists_lib}"))
             .insert_header(("X-Emby-Token", token.clone()))
             .to_request();
         let list: Value = test::call_and_read_body_json(&app, req).await;

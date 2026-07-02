@@ -300,11 +300,30 @@ fn movies_library_view(state: &JellyfinState) -> Option<BaseItemDto> {
     })
 }
 
+/// Virtual "Playlists" library. Jellyfin's reference server auto-creates
+/// this view so clients (Moonfin, Findroid, official web) render playlists
+/// as a top-level tile alongside Music and Movies. `CollectionType` is the
+/// spec enum value `"playlists"` (plural).
+fn playlists_library_view(state: &JellyfinState) -> BaseItemDto {
+    BaseItemDto {
+        id: mapping::playlists_library_guid(),
+        server_id: Some(state.server_id.clone()),
+        name: Some("Playlists".to_string()),
+        item_type: "CollectionFolder",
+        media_type: "Unknown",
+        is_folder: Some(true),
+        collection_type: Some("playlists"),
+        location_type: Some("FileSystem"),
+        ..Default::default()
+    }
+}
+
 fn all_library_views(state: &JellyfinState) -> Vec<BaseItemDto> {
     let mut v = vec![music_library_view(state)];
     if let Some(view) = movies_library_view(state) {
         v.push(view);
     }
+    v.push(playlists_library_view(state));
     v
 }
 
@@ -350,6 +369,12 @@ pub async fn library_virtual_folders(
             "ItemId": mapping::movies_library_guid(),
         }));
     }
+    folders.push(json!({
+        "Name": "Playlists",
+        "Locations": [],
+        "CollectionType": "playlists",
+        "ItemId": mapping::playlists_library_guid(),
+    }));
     HttpResponse::Ok().json(folders)
 }
 
@@ -821,6 +846,7 @@ pub async fn user_items(
 async fn items_impl(state: web::Data<JellyfinState>, q: ItemsQuery) -> HttpResponse {
     let library_id = mapping::library_guid();
     let movies_id = mapping::movies_library_guid();
+    let playlists_id = mapping::playlists_library_guid();
 
     // `/Items?userId=X` with no other filters is the "show me my libraries"
     // call (real Jellyfin returns CollectionFolders here). Findroid's
@@ -945,6 +971,9 @@ async fn items_impl(state: web::Data<JellyfinState>, q: ItemsQuery) -> HttpRespo
         if g == library_id {
             // Top-level inside the music library — list artists by default, albums if requested.
             return list_artists_or_albums(&state, &q).await;
+        }
+        if g == playlists_id {
+            return list_playlists(&state, &q).await;
         }
         if g == movies_id {
             return list_movies(&state, &q).await;
@@ -1618,11 +1647,35 @@ pub async fn items_prefixes(
                 "movies"
             } else if g == mapping::library_guid() {
                 "music"
+            } else if g == mapping::playlists_library_guid() {
+                "playlists"
             } else {
                 ""
             }
         })
         .unwrap_or("");
+
+    if parent_kind == "playlists" || includes(&q.include_item_types, "Playlist") {
+        let names = repo::all_playlists(&state.pool).await.unwrap_or_default();
+        let mut letters: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for p in &names {
+            let first = p
+                .name
+                .chars()
+                .next()
+                .map(|c| c.to_ascii_uppercase().to_string())
+                .unwrap_or_default();
+            if let Some(c) = first.chars().next() {
+                if c.is_ascii_alphabetic() {
+                    letters.insert(first);
+                } else {
+                    letters.insert("#".to_string());
+                }
+            }
+        }
+        let items: Vec<Value> = letters.into_iter().map(|n| json!({ "Name": n })).collect();
+        return HttpResponse::Ok().json(items);
+    }
 
     let letters = if wants_videos(&q) || parent_kind == "movies" {
         repo::video_name_prefixes(&state.pool).await
@@ -1716,6 +1769,8 @@ fn library_view_for(state: &JellyfinState, guid: &str) -> Option<BaseItemDto> {
         Some(music_library_view(state))
     } else if guid == mapping::movies_library_guid() {
         movies_library_view(state)
+    } else if guid == mapping::playlists_library_guid() {
+        Some(playlists_library_view(state))
     } else {
         None
     }
@@ -2309,6 +2364,15 @@ pub async fn items_latest(
             let mut dtos = Vec::with_capacity(albums.len());
             for a in &albums {
                 dtos.push(album_to_dto(&state, a).await);
+            }
+            return HttpResponse::Ok().json(dtos);
+        }
+        if g == mapping::playlists_library_guid() {
+            let playlists = repo::all_playlists(&state.pool).await.unwrap_or_default();
+            let take = (limit as usize).min(playlists.len());
+            let mut dtos = Vec::with_capacity(take);
+            for p in playlists.iter().take(take) {
+                dtos.push(playlist_to_dto(&state, p).await);
             }
             return HttpResponse::Ok().json(dtos);
         }
