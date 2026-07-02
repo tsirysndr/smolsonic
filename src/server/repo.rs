@@ -681,6 +681,50 @@ pub async fn distinct_years(pool: &Db) -> Result<Vec<i32>> {
     Ok(rows.into_iter().map(|(y,)| y as i32).collect())
 }
 
+/// Per-year stats for the `/Years/{year}` endpoint: (song_count, album_count).
+/// Returns None when the year has no rows.
+pub async fn find_year_stats(pool: &Db, year: i32) -> Result<Option<(i64, i64)>> {
+    let song_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM songs WHERE year = ?1")
+        .bind(year as i64)
+        .fetch_one(pool)
+        .await?;
+    let album_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM albums WHERE year = ?1")
+        .bind(year as i64)
+        .fetch_one(pool)
+        .await?;
+    if song_count == 0 && album_count == 0 {
+        return Ok(None);
+    }
+    Ok(Some((song_count, album_count)))
+}
+
+pub async fn songs_by_year(pool: &Db, year: i32, limit: i64, offset: i64) -> Result<Vec<Song>> {
+    let rows = sqlx::query_as::<_, Song>(
+        "SELECT id, path, title, artist, artist_id, album, album_id, genre, track_number,
+                disc_number, year, duration_ms, bitrate, filesize, suffix, content_type, cover_art
+         FROM songs WHERE year = ?1
+         ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, track_number
+         LIMIT ?2 OFFSET ?3",
+    )
+    .bind(year as i64)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn albums_by_year(pool: &Db, year: i32) -> Result<Vec<Album>> {
+    let rows = sqlx::query_as::<_, Album>(
+        "SELECT id, title, artist, artist_id, year, cover_art FROM albums
+         WHERE year = ?1 ORDER BY title COLLATE NOCASE",
+    )
+    .bind(year as i64)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// Random `size` songs whose native artist_id matches. Backs the artist /
 /// album / song seeds in `/…/InstantMix` — each seed narrows to the artist,
 /// then falls back to genre/random filler in the handler.

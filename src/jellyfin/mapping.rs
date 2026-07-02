@@ -11,6 +11,7 @@ pub const KIND_PLAYLIST: &str = "playlist";
 pub const KIND_LIBRARY: &str = "library";
 pub const KIND_USER: &str = "user";
 pub const KIND_GENRE: &str = "genre";
+pub const KIND_YEAR: &str = "year";
 
 /// Stable per (kind, native_id) GUID, formatted as a dashed UUID
 /// (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`). Jellyfin clients built on the
@@ -154,6 +155,27 @@ pub async fn remember_genre(pool: &Db, name: &str) -> Result<String> {
     .bind(&g)
     .bind(KIND_GENRE)
     .bind(name)
+    .execute(pool)
+    .await?;
+    Ok(g)
+}
+
+/// Deterministic GUID for a release year. Years are derived from
+/// `songs.year` / `albums.year` — no dedicated table — so this is our
+/// stable id for `/Years` browse tiles and drill-down.
+pub fn year_guid(year: i32) -> String {
+    guid(KIND_YEAR, &year.to_string())
+}
+
+pub async fn remember_year(pool: &Db, year: i32) -> Result<String> {
+    let g = year_guid(year);
+    sqlx::query(
+        "INSERT INTO jf_guids (guid, kind, native_id) VALUES (?1, ?2, ?3)
+         ON CONFLICT(guid) DO NOTHING",
+    )
+    .bind(&g)
+    .bind(KIND_YEAR)
+    .bind(year.to_string())
     .execute(pool)
     .await?;
     Ok(g)

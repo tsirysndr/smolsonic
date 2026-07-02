@@ -603,6 +603,15 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             "/MusicGenres/{name}",
             web::get().to(handlers::genre_by_name),
         )
+        // Year / Person / Studio — item-by-name browsing per the Jellyfin
+        // spec. Years are populated from songs.year + albums.year; Persons
+        // and Studios return empty because smolsonic doesn't scan them.
+        .route("/Years", web::get().to(handlers::years_list))
+        .route("/Years/{year}", web::get().to(handlers::year_by_value))
+        .route("/Persons", web::get().to(handlers::persons_list))
+        .route("/Persons/{name}", web::get().to(handlers::person_by_name))
+        .route("/Studios", web::get().to(handlers::studios_list))
+        .route("/Studios/{name}", web::get().to(handlers::studio_by_name))
         // /System/Ping is the canonical Jellyfin heartbeat — plain text body.
         .route("/System/Ping", web::get().to(handlers::system_ping))
         .route("/System/Ping", web::head().to(handlers::system_ping))
@@ -2571,6 +2580,157 @@ mod tests {
             .to_request();
         let body: Value = test::call_and_read_body_json(&app, req).await;
         assert_eq!(body["Type"], "MusicArtist");
+        assert!(body["Overview"].is_null());
+        assert!(body["Tags"].is_null());
+        assert!(body["ExternalUrls"].is_null());
+    }
+
+    /// Year browsing + Person/Studio stubs — models the Jellyfin OpenAPI
+    /// Person/Studio/Year tags. Album detail Overview/Tags/ExternalUrls
+    /// remain null when the Last.fm plugin is disabled (fixture default).
+    #[actix_web::test]
+    async fn years_persons_studios_and_album_detail_without_lastfm() {
+        let dir = tempdir();
+        let state = fixture_state(&dir, &dir, false).await;
+
+        // Add a second album with a distinct year so /Years has two entries.
+        sqlx::query(
+            "INSERT INTO albums (id, title, artist, artist_id, year, cover_art)
+             VALUES ('al-2019','Older Album','Test Artist','ar-1',2019,NULL)",
+        )
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        let older_song = dir.join("older.mp3");
+        let mut f = std::fs::File::create(&older_song).unwrap();
+        Write::write_all(&mut f, &[0u8; 4096]).unwrap();
+        sqlx::query(
+            "INSERT INTO songs (id, path, title, artist, artist_id, album, album_id, genre,
+                track_number, disc_number, year, duration_ms, bitrate, filesize, suffix, content_type, cover_art, mtime)
+             VALUES ('so-old', ?1, 'Older Song', 'Test Artist', 'ar-1', 'Older Album', 'al-2019', NULL,
+                1, 1, 2019, 45000, 192, 4096, 'mp3', 'audio/mpeg', NULL, 0)",
+        )
+        .bind(older_song.to_string_lossy().to_string())
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(configure_routes),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/Users/AuthenticateByName")
+            .insert_header((
+                "X-Emby-Authorization",
+                r#"MediaBrowser Client="t", Device="d", DeviceId="i", Version="v""#,
+            ))
+            .set_json(serde_json::json!({"Username":"alice","Pw":"secret"}))
+            .to_request();
+        let auth_body: Value = test::call_and_read_body_json(&app, req).await;
+        let token = auth_body["AccessToken"].as_str().unwrap().to_string();
+
+        // /Years — 2 distinct years, ascending by default.
+        let req = test::TestRequest::get()
+            .uri("/Years")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["TotalRecordCount"], 2);
+        assert_eq!(body["Items"][0]["Name"], "2019");
+        assert_eq!(body["Items"][0]["Type"], "Year");
+        assert_eq!(body["Items"][1]["Name"], "2020");
+        let y2020_id = body["Items"][1]["Id"].as_str().unwrap().to_string();
+
+        // sortOrder=Descending flips.
+        let req = test::TestRequest::get()
+            .uri("/Years?sortOrder=Descending")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["Items"][0]["Name"], "2020");
+        assert_eq!(body["Items"][1]["Name"], "2019");
+
+        // /Years/2019 — single-year BaseItem.
+        let req = test::TestRequest::get()
+            .uri("/Years/2019")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["Name"], "2019");
+        assert_eq!(body["Type"], "Year");
+        assert_eq!(body["ProductionYear"], 2019);
+        assert_eq!(body["SongCount"], 1);
+        assert_eq!(body["AlbumCount"], 1);
+
+        // Unknown year → 404.
+        let req = test::TestRequest::get()
+            .uri("/Years/1999")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        assert_eq!(
+            test::call_service(&app, req).await.status(),
+            StatusCode::NOT_FOUND
+        );
+
+        // /Items?parentId=<year_guid> lists that year's songs.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Items?parentId={y2020_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["TotalRecordCount"], 1);
+        assert_eq!(body["Items"][0]["Name"], "Test Song");
+
+        // …with IncludeItemTypes=MusicAlbum, returns albums instead.
+        let req = test::TestRequest::get()
+            .uri(&format!(
+                "/Items?parentId={y2020_id}&IncludeItemTypes=MusicAlbum"
+            ))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["TotalRecordCount"], 1);
+        assert_eq!(body["Items"][0]["Type"], "MusicAlbum");
+
+        // /Persons and /Studios return an empty ItemsResult.
+        for uri in ["/Persons", "/Studios"] {
+            let req = test::TestRequest::get()
+                .uri(uri)
+                .insert_header(("X-Emby-Token", token.clone()))
+                .to_request();
+            let body: Value = test::call_and_read_body_json(&app, req).await;
+            assert_eq!(body["TotalRecordCount"], 0, "{uri}");
+            assert!(body["Items"].as_array().unwrap().is_empty(), "{uri}");
+        }
+        // /Persons/foo and /Studios/foo → 404.
+        for uri in ["/Persons/foo", "/Studios/foo"] {
+            let req = test::TestRequest::get()
+                .uri(uri)
+                .insert_header(("X-Emby-Token", token.clone()))
+                .to_request();
+            assert_eq!(
+                test::call_service(&app, req).await.status(),
+                StatusCode::NOT_FOUND,
+                "{uri}"
+            );
+        }
+
+        // Album detail without Last.fm — Overview/Tags/ExternalUrls null.
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=MusicAlbum")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let albums: Value = test::call_and_read_body_json(&app, req).await;
+        let album_id = albums["Items"][0]["Id"].as_str().unwrap().to_string();
+        let req = test::TestRequest::get()
+            .uri(&format!("/Items/{album_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["Type"], "MusicAlbum");
         assert!(body["Overview"].is_null());
         assert!(body["Tags"].is_null());
         assert!(body["ExternalUrls"].is_null());

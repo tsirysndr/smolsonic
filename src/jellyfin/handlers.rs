@@ -567,6 +567,28 @@ async fn album_to_dto(state: &JellyfinState, al: &Album) -> BaseItemDto {
         .await
         .unwrap_or(0);
     let user_data = build_user_data(state, &al.id, id.clone()).await;
+    // Last.fm-sourced Overview / Tags / ExternalUrls, same silent-fallback
+    // as `artist_to_dto`.
+    let mut overview: Option<String> = None;
+    let mut tags: Option<Vec<String>> = None;
+    let mut external_urls: Option<Vec<super::dto::ExternalUrl>> = None;
+    if let Some(lf) = &state.similar.lastfm {
+        if let Ok(info) = lf
+            .album_info_cached(&state.pool, &al.id, &al.artist, &al.title)
+            .await
+        {
+            overview = info.bio;
+            if !info.tags.is_empty() {
+                tags = Some(info.tags);
+            }
+            if let Some(url) = info.url {
+                external_urls = Some(vec![super::dto::ExternalUrl {
+                    name: Some("Last.fm".to_string()),
+                    url: Some(url),
+                }]);
+            }
+        }
+    }
     BaseItemDto {
         id: id.clone(),
         server_id: Some(state.server_id.clone()),
@@ -602,6 +624,9 @@ async fn album_to_dto(state: &JellyfinState, al: &Album) -> BaseItemDto {
         song_count: Some(song_count),
         child_count: Some(song_count),
         location_type: Some("FileSystem"),
+        overview,
+        tags,
+        external_urls,
         image_tags: Some(ImageTags {
             primary: al.cover_art.clone().map(|_| al.id.clone()),
         }),
@@ -1093,6 +1118,44 @@ async fn items_impl(state: web::Data<JellyfinState>, q: ItemsQuery) -> HttpRespo
                             start_index: offset as i32,
                         });
                     }
+                    let mut dtos = Vec::with_capacity(songs.len());
+                    for s in &songs {
+                        dtos.push(song_to_dto(&state, s).await);
+                    }
+                    let total = dtos.len() as i32;
+                    return HttpResponse::Ok().json(ItemsResult {
+                        items: dtos,
+                        total_record_count: total,
+                        start_index: offset as i32,
+                    });
+                }
+                "year" => {
+                    // Drill-down from `/Years` tap. `native` is the year
+                    // string (we stored it in `jf_guids.native_id`).
+                    let Ok(year) = native.parse::<i32>() else {
+                        return HttpResponse::NotFound().finish();
+                    };
+                    // Albums variant — Findroid's "albums by year" tile.
+                    if includes(&q.include_item_types, "MusicAlbum") {
+                        let albums = repo::albums_by_year(&state.pool, year)
+                            .await
+                            .unwrap_or_default();
+                        let mut dtos = Vec::with_capacity(albums.len());
+                        for a in &albums {
+                            dtos.push(album_to_dto(&state, a).await);
+                        }
+                        let total = dtos.len() as i32;
+                        return HttpResponse::Ok().json(ItemsResult {
+                            items: dtos,
+                            total_record_count: total,
+                            start_index: 0,
+                        });
+                    }
+                    let limit = q.limit.unwrap_or(500).max(1);
+                    let offset = q.start_index.unwrap_or(0).max(0);
+                    let songs = repo::songs_by_year(&state.pool, year, limit, offset)
+                        .await
+                        .unwrap_or_default();
                     let mut dtos = Vec::with_capacity(songs.len());
                     for s in &songs {
                         dtos.push(song_to_dto(&state, s).await);
@@ -3051,6 +3114,105 @@ pub async fn genre_by_name(
         Some(dto) => HttpResponse::Ok().json(dto),
         None => HttpResponse::NotFound().finish(),
     }
+}
+
+async fn year_to_dto(state: &JellyfinState, year: i32) -> Option<BaseItemDto> {
+    let (song_count, album_count) = repo::find_year_stats(&state.pool, year)
+        .await
+        .ok()
+        .flatten()?;
+    let id = mapping::remember_year(&state.pool, year)
+        .await
+        .unwrap_or_else(|_| mapping::year_guid(year));
+    let name = year.to_string();
+    Some(BaseItemDto {
+        id,
+        server_id: Some(state.server_id.clone()),
+        name: Some(name.clone()),
+        item_type: "Year",
+        media_type: "Unknown",
+        is_folder: Some(true),
+        sort_name: Some(name),
+        location_type: Some("FileSystem"),
+        production_year: Some(year),
+        song_count: Some(song_count as i32),
+        album_count: Some(album_count as i32),
+        child_count: Some((song_count + album_count) as i32),
+        ..Default::default()
+    })
+}
+
+pub async fn years_list(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let q = parse_items_query(&req);
+    let years = repo::distinct_years(&state.pool).await.unwrap_or_default();
+    let total = years.len() as i32;
+    let start = q.start_index.unwrap_or(0).max(0) as usize;
+    let take = q.limit.map(|n| n.max(1) as usize).unwrap_or(usize::MAX);
+    // sortOrder=Descending is common on the year rail — flip when asked.
+    let ordered: Vec<i32> = if q
+        .sort_order
+        .as_deref()
+        .map(|s| s.eq_ignore_ascii_case("Descending"))
+        .unwrap_or(false)
+    {
+        years.into_iter().rev().collect()
+    } else {
+        years
+    };
+    let mut dtos: Vec<BaseItemDto> = Vec::new();
+    for year in ordered.into_iter().skip(start).take(take) {
+        if let Some(dto) = year_to_dto(&state, year).await {
+            dtos.push(dto);
+        }
+    }
+    HttpResponse::Ok().json(ItemsResult {
+        items: dtos,
+        total_record_count: total,
+        start_index: start as i32,
+    })
+}
+
+pub async fn year_by_value(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<i32>,
+) -> HttpResponse {
+    let year = path.into_inner();
+    match year_to_dto(&state, year).await {
+        Some(dto) => HttpResponse::Ok().json(dto),
+        None => HttpResponse::NotFound().finish(),
+    }
+}
+
+/// `/Persons` and `/Studios` — smolsonic doesn't scan Persons (composers,
+/// performers) or Studios (labels) into the DB. Return an empty result so
+/// clients render "no persons/studios" cleanly rather than 404-ing.
+pub async fn persons_list(_user: AuthedUser) -> HttpResponse {
+    HttpResponse::Ok().json(ItemsResult {
+        items: vec![],
+        total_record_count: 0,
+        start_index: 0,
+    })
+}
+
+pub async fn person_by_name(_user: AuthedUser, _path: web::Path<String>) -> HttpResponse {
+    HttpResponse::NotFound().finish()
+}
+
+pub async fn studios_list(_user: AuthedUser) -> HttpResponse {
+    HttpResponse::Ok().json(ItemsResult {
+        items: vec![],
+        total_record_count: 0,
+        start_index: 0,
+    })
+}
+
+pub async fn studio_by_name(_user: AuthedUser, _path: web::Path<String>) -> HttpResponse {
+    HttpResponse::NotFound().finish()
 }
 
 // ── Images ───────────────────────────────────────────────────────────────────

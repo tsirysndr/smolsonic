@@ -123,6 +123,16 @@ async fn migrate(pool: &Db) -> Result<()> {
             fetched_at  TEXT NOT NULL
         );
 
+        -- Album counterpart of lastfm_artist_info — cache for
+        -- `album.getInfo` (wiki summary, tags, Last.fm URL).
+        CREATE TABLE IF NOT EXISTS lastfm_album_info (
+            album_id    TEXT PRIMARY KEY,
+            bio         TEXT,
+            tags_json   TEXT NOT NULL DEFAULT '[]',
+            url         TEXT,
+            fetched_at  TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS playlists (
             id          TEXT PRIMARY KEY,
             name        TEXT NOT NULL,
