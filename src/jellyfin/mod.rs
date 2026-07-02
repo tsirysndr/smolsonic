@@ -196,6 +196,14 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             "/Items/{id}/Download",
             web::get().to(handlers::item_file_stream),
         )
+        // InstantMix — modelled after the Jellyfin OpenAPI InstantMix tag.
+        // Every route must precede its parent catch-all (`/Items/{id}`,
+        // `/Artists/{name}`, `/Playlists/{id}`) because actix matches in
+        // registration order.
+        .route(
+            "/Items/{id}/InstantMix",
+            web::get().to(handlers::item_instant_mix),
+        )
         .route("/Items/{id}", web::get().to(handlers::item_by_id))
         // DELETE /Items/{id} — Jellyfin uses this to delete playlists (they
         // are `BaseItem`s). Songs/albums are read-only in smolsonic and get
@@ -255,6 +263,31 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .route(
             "/Artists/Prefixes",
             web::get().to(handlers::artists_prefixes),
+        )
+        // `/Artists/{id}/InstantMix` MUST come before `/Artists/{name}`
+        // (both share the same segment count so actix falls back to reg
+        // order for disambiguation).
+        .route(
+            "/Artists/{id}/InstantMix",
+            web::get().to(handlers::artist_instant_mix),
+        )
+        .route(
+            "/Albums/{id}/InstantMix",
+            web::get().to(handlers::album_instant_mix),
+        )
+        .route(
+            "/Songs/{id}/InstantMix",
+            web::get().to(handlers::song_instant_mix),
+        )
+        // `/MusicGenres/InstantMix` (literal) must precede
+        // `/MusicGenres/{name}/InstantMix` so the query-id form binds first.
+        .route(
+            "/MusicGenres/InstantMix",
+            web::get().to(handlers::genre_instant_mix_by_id),
+        )
+        .route(
+            "/MusicGenres/{name}/InstantMix",
+            web::get().to(handlers::genre_instant_mix),
         )
         .route("/Artists/{name}", web::get().to(handlers::artist_by_name))
         // Images — Findroid uses lowercase `/items/...` so we register both.
@@ -446,6 +479,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
         .route(
             "/Playlists/{id}/Users",
             web::get().to(handlers::playlist_users),
+        )
+        .route(
+            "/Playlists/{id}/InstantMix",
+            web::get().to(handlers::playlist_instant_mix),
         )
         .route(
             "/Playlists/{id}",
@@ -1548,6 +1585,247 @@ mod tests {
                 .uri(&uri)
                 .insert_header(("X-Emby-Token", token.clone()))
                 .set_json(serde_json::json!({}))
+                .to_request();
+            assert_eq!(
+                test::call_service(&app, req).await.status(),
+                StatusCode::NOT_FOUND,
+                "expected 404 for {uri}"
+            );
+        }
+    }
+
+    /// Exercises the InstantMix API (Jellyfin OpenAPI InstantMix tag) —
+    /// artist, album, song, playlist, and genre seeds all return a
+    /// `BaseItemDtoQueryResult` of Audio items honouring `?limit`.
+    #[actix_web::test]
+    async fn instant_mix_seeds_and_limit() {
+        let dir = tempdir();
+        let state = fixture_state(&dir, &dir, false).await;
+
+        // Insert a second artist + album + several extra songs so the mix
+        // has enough material to exercise the three-tier fallback (same
+        // artist → same genre → random library-wide).
+        sqlx::query(
+            "INSERT INTO artists (id, name, name_lower) VALUES ('ar-2','Another Artist','another artist')",
+        )
+        .execute(&state.pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO albums (id, title, artist, artist_id, year, cover_art)
+             VALUES ('al-2','Other Album','Another Artist','ar-2',2021,NULL)",
+        )
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        for (id, title, artist_id, album_id, genre) in [
+            ("so-2", "Second Song", "ar-1", "al-1", Some("Rock")),
+            ("so-3", "Third Song", "ar-1", "al-1", Some("Rock")),
+            ("so-4", "Fourth Song", "ar-2", "al-2", Some("Rock")),
+            ("so-5", "Fifth Song", "ar-2", "al-2", Some("Jazz")),
+        ] {
+            let path = dir.join(format!("{id}.mp3"));
+            let mut f = std::fs::File::create(&path).unwrap();
+            Write::write_all(&mut f, &[0u8; 4096]).unwrap();
+            let genre_val = genre.map(|g| g.to_string());
+            let artist_name = if artist_id == "ar-1" {
+                "Test Artist"
+            } else {
+                "Another Artist"
+            };
+            let album_title = if album_id == "al-1" {
+                "Test Album"
+            } else {
+                "Other Album"
+            };
+            sqlx::query(
+                "INSERT INTO songs (id, path, title, artist, artist_id, album, album_id, genre,
+                    track_number, disc_number, year, duration_ms, bitrate, filesize, suffix, content_type, cover_art, mtime)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
+                    1, 1, 2020, 60000, 192, 4096, 'mp3', 'audio/mpeg', NULL, 0)",
+            )
+            .bind(id)
+            .bind(path.to_string_lossy().to_string())
+            .bind(title)
+            .bind(artist_name)
+            .bind(artist_id)
+            .bind(album_title)
+            .bind(album_id)
+            .bind(genre_val)
+            .execute(&state.pool).await.unwrap();
+        }
+
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(configure_routes),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/Users/AuthenticateByName")
+            .insert_header((
+                "X-Emby-Authorization",
+                r#"MediaBrowser Client="t", Device="d", DeviceId="i", Version="v""#,
+            ))
+            .set_json(serde_json::json!({"Username":"alice","Pw":"secret"}))
+            .to_request();
+        let auth_body: Value = test::call_and_read_body_json(&app, req).await;
+        let token = auth_body["AccessToken"].as_str().unwrap().to_string();
+
+        // Discover GUIDs for artist / album / song by iterating /Items.
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=MusicArtist")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let artists: Value = test::call_and_read_body_json(&app, req).await;
+        let ar1 = artists["Items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["Name"] == "Test Artist")
+            .unwrap()["Id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=MusicAlbum")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let albums: Value = test::call_and_read_body_json(&app, req).await;
+        let al1 = albums["Items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["Name"] == "Test Album")
+            .unwrap()["Id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=Audio")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let songs: Value = test::call_and_read_body_json(&app, req).await;
+        let so1 = songs["Items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["Name"] == "Test Song")
+            .unwrap()["Id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Artist seed — every song by that artist plus filler up to limit.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Artists/{ar1}/InstantMix?limit=5"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let mix: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(mix["TotalRecordCount"], 5);
+        assert_eq!(mix["Items"][0]["MediaType"], "Audio");
+        assert_eq!(mix["Items"][0]["Type"], "Audio");
+
+        // Album seed.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Albums/{al1}/InstantMix?limit=3"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let mix: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(mix["TotalRecordCount"], 3);
+
+        // Song seed — first item MUST be the seed itself.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Songs/{so1}/InstantMix?limit=4"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let mix: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(mix["TotalRecordCount"], 4);
+        assert_eq!(mix["Items"][0]["Id"], so1);
+        assert_eq!(mix["Items"][0]["Name"], "Test Song");
+        // No duplicates.
+        let ids: std::collections::HashSet<&str> = mix["Items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["Id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids.len(), 4);
+
+        // Same seed routed through /Items/{id}/InstantMix dispatches to the
+        // song handler.
+        let req = test::TestRequest::get()
+            .uri(&format!("/Items/{so1}/InstantMix?limit=2"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let mix: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(mix["TotalRecordCount"], 2);
+        assert_eq!(mix["Items"][0]["Id"], so1);
+
+        // Genre seed by name.
+        let req = test::TestRequest::get()
+            .uri("/MusicGenres/Rock/InstantMix?limit=3")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let mix: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(mix["TotalRecordCount"], 3);
+        // Every returned song must be Rock — the 3 rock songs are so-2..so-4.
+        let names: std::collections::HashSet<&str> = mix["Items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["Name"].as_str().unwrap())
+            .collect();
+        for n in &names {
+            assert!(
+                ["Second Song", "Third Song", "Fourth Song"].contains(n),
+                "unexpected non-Rock song in genre mix: {n}"
+            );
+        }
+
+        // /MusicGenres/InstantMix?id=… — smolsonic returns an empty result
+        // rather than 404 (no Genre BaseItems to resolve against).
+        let req = test::TestRequest::get()
+            .uri("/MusicGenres/InstantMix?id=00000000-0000-0000-0000-000000000000&limit=5")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let mix: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(mix["TotalRecordCount"], 0);
+
+        // Playlist seed — mixes the playlist's songs first, then filler.
+        let req = test::TestRequest::post()
+            .uri("/Playlists")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .set_json(serde_json::json!({
+                "Name": "Mix Seed",
+                "Ids": [so1.clone()],
+                "MediaType": "Audio",
+            }))
+            .to_request();
+        let created: Value = test::call_and_read_body_json(&app, req).await;
+        let playlist_id = created["Id"].as_str().unwrap().to_string();
+        let req = test::TestRequest::get()
+            .uri(&format!("/Playlists/{playlist_id}/InstantMix?limit=5"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let mix: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(mix["TotalRecordCount"], 5);
+        assert_eq!(mix["Items"][0]["Id"], so1);
+
+        // Unknown GUID → 404 on each specific-kind endpoint.
+        let bogus = "00000000-0000-0000-0000-000000000000";
+        for uri in [
+            format!("/Artists/{bogus}/InstantMix"),
+            format!("/Albums/{bogus}/InstantMix"),
+            format!("/Songs/{bogus}/InstantMix"),
+            format!("/Playlists/{bogus}/InstantMix"),
+            format!("/Items/{bogus}/InstantMix"),
+        ] {
+            let req = test::TestRequest::get()
+                .uri(&uri)
+                .insert_header(("X-Emby-Token", token.clone()))
                 .to_request();
             assert_eq!(
                 test::call_service(&app, req).await.status(),

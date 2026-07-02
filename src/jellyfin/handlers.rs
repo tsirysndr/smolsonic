@@ -2028,6 +2028,296 @@ pub async fn artist_by_name(
     }
 }
 
+// ── InstantMix ──────────────────────────────────────────────────────────────
+//
+// Spec (Jellyfin OpenAPI, InstantMix tag): seven endpoints — one per seed
+// kind — each returning `BaseItemDtoQueryResult` (an `ItemsResult` of
+// `Audio` items). Real Jellyfin uses a music-similarity backend; smolsonic
+// approximates with a three-tier fallback:
+//   1. songs by the seed's artist  (or the seed song itself first)
+//   2. songs in the seed's genre
+//   3. random library-wide filler
+// The result is deduped by native id and capped at `limit` (default 50 in
+// the spec — Symfonium/Streamyfin both use 100).
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // `id` is accepted for spec-compliance but not consulted.
+pub struct InstantMixQuery {
+    #[serde(default, alias = "Limit")]
+    pub limit: Option<i64>,
+    /// Only present on `/MusicGenres/InstantMix` — the seed genre's id.
+    /// smolsonic doesn't emit Genre BaseItems so we accept-and-ignore.
+    #[serde(default, alias = "Id")]
+    pub id: Option<String>,
+}
+
+/// Assemble the InstantMix result. `artist_id` narrows tier 1, `genre` narrows
+/// tier 2, `seeds` are inserted at the front (used by the song- and
+/// playlist-seeded mixes). Any of the tiers can be absent — the next one
+/// takes over.
+async fn build_instant_mix(
+    state: &JellyfinState,
+    limit: i64,
+    seeds: Vec<Song>,
+    artist_id: Option<String>,
+    genre: Option<String>,
+) -> Vec<Song> {
+    let target = limit.max(1) as usize;
+    let mut out: Vec<Song> = Vec::with_capacity(target);
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for s in seeds {
+        if out.len() >= target {
+            break;
+        }
+        if seen.insert(s.id.clone()) {
+            out.push(s);
+        }
+    }
+
+    // Tier 1: same artist.
+    if let Some(aid) = artist_id.as_deref() {
+        if out.len() < target {
+            let more = repo::random_songs_by_artist(&state.pool, aid, target as i64 * 2)
+                .await
+                .unwrap_or_default();
+            for s in more {
+                if out.len() >= target {
+                    break;
+                }
+                if seen.insert(s.id.clone()) {
+                    out.push(s);
+                }
+            }
+        }
+    }
+
+    // Tier 2: same genre.
+    if let Some(g) = genre.as_deref() {
+        if out.len() < target {
+            let more = repo::random_songs(&state.pool, target as i64 * 2, None, None, Some(g))
+                .await
+                .unwrap_or_default();
+            for s in more {
+                if out.len() >= target {
+                    break;
+                }
+                if seen.insert(s.id.clone()) {
+                    out.push(s);
+                }
+            }
+        }
+    }
+
+    // Tier 3: random library-wide filler.
+    if out.len() < target {
+        let more = repo::random_songs(&state.pool, target as i64 * 2, None, None, None)
+            .await
+            .unwrap_or_default();
+        for s in more {
+            if out.len() >= target {
+                break;
+            }
+            if seen.insert(s.id.clone()) {
+                out.push(s);
+            }
+        }
+    }
+
+    out
+}
+
+async fn songs_to_items_result(state: &JellyfinState, songs: Vec<Song>) -> HttpResponse {
+    let mut dtos = Vec::with_capacity(songs.len());
+    for s in &songs {
+        dtos.push(song_to_dto(state, s).await);
+    }
+    let total = dtos.len() as i32;
+    HttpResponse::Ok().json(ItemsResult {
+        items: dtos,
+        total_record_count: total,
+        start_index: 0,
+    })
+}
+
+fn instant_mix_limit(q: &InstantMixQuery) -> i64 {
+    q.limit.unwrap_or(50).max(1)
+}
+
+/// `GET /Albums/{itemId}/InstantMix`
+pub async fn album_instant_mix(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    query: web::Query<InstantMixQuery>,
+) -> HttpResponse {
+    let g = mapping::normalize_guid(&path.into_inner());
+    let Some((kind, native)) = resolve_native(&state, &g).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    if kind != "album" {
+        return HttpResponse::NotFound().finish();
+    }
+    let Ok(Some(al)) = repo::find_album(&state.pool, &native).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    // Genre for an album isn't stored on the row — sample one song from the
+    // album to get a representative genre. Cheap: it's already in `songs`.
+    let genre = repo::songs_by_album(&state.pool, &native)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|s| s.genre);
+    let songs = build_instant_mix(
+        &state,
+        instant_mix_limit(&query),
+        Vec::new(),
+        Some(al.artist_id.clone()),
+        genre,
+    )
+    .await;
+    songs_to_items_result(&state, songs).await
+}
+
+/// `GET /Artists/{itemId}/InstantMix`
+pub async fn artist_instant_mix(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    query: web::Query<InstantMixQuery>,
+) -> HttpResponse {
+    let g = mapping::normalize_guid(&path.into_inner());
+    let Some((kind, native)) = resolve_native(&state, &g).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    if kind != "artist" {
+        return HttpResponse::NotFound().finish();
+    }
+    let songs = build_instant_mix(
+        &state,
+        instant_mix_limit(&query),
+        Vec::new(),
+        Some(native),
+        None,
+    )
+    .await;
+    songs_to_items_result(&state, songs).await
+}
+
+/// `GET /Songs/{itemId}/InstantMix`
+pub async fn song_instant_mix(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    query: web::Query<InstantMixQuery>,
+) -> HttpResponse {
+    let g = mapping::normalize_guid(&path.into_inner());
+    let Some((kind, native)) = resolve_native(&state, &g).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    if kind != "song" {
+        return HttpResponse::NotFound().finish();
+    }
+    let Ok(Some(seed)) = repo::find_song(&state.pool, &native).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    let artist_id = seed.artist_id.clone();
+    let genre = seed.genre.clone();
+    let songs = build_instant_mix(
+        &state,
+        instant_mix_limit(&query),
+        vec![seed],
+        Some(artist_id),
+        genre,
+    )
+    .await;
+    songs_to_items_result(&state, songs).await
+}
+
+/// `GET /Playlists/{itemId}/InstantMix` — take the playlist's songs in
+/// order, then top up with same-genre + random-library filler.
+pub async fn playlist_instant_mix(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    query: web::Query<InstantMixQuery>,
+) -> HttpResponse {
+    let g = mapping::normalize_guid(&path.into_inner());
+    let Some((kind, native)) = resolve_native(&state, &g).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    if kind != "playlist" {
+        return HttpResponse::NotFound().finish();
+    }
+    let limit = instant_mix_limit(&query);
+    let playlist_songs = repo::playlist_songs(&state.pool, &native)
+        .await
+        .unwrap_or_default();
+    let genre = playlist_songs.iter().find_map(|s| s.genre.clone());
+    let songs = build_instant_mix(&state, limit, playlist_songs, None, genre).await;
+    songs_to_items_result(&state, songs).await
+}
+
+/// `GET /MusicGenres/{name}/InstantMix`
+pub async fn genre_instant_mix(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    query: web::Query<InstantMixQuery>,
+) -> HttpResponse {
+    let name = path.into_inner();
+    let songs = build_instant_mix(
+        &state,
+        instant_mix_limit(&query),
+        Vec::new(),
+        None,
+        Some(name),
+    )
+    .await;
+    songs_to_items_result(&state, songs).await
+}
+
+/// `GET /MusicGenres/InstantMix?id=…` — same as the path-parameterised
+/// variant but the seed genre is identified by GUID. smolsonic doesn't emit
+/// Genre BaseItems, so any provided `id` won't resolve — return an empty
+/// result rather than 404 to match real-server behaviour (the client
+/// gracefully hides the empty rail).
+pub async fn genre_instant_mix_by_id(
+    _user: AuthedUser,
+    _state: web::Data<JellyfinState>,
+    _query: web::Query<InstantMixQuery>,
+) -> HttpResponse {
+    HttpResponse::Ok().json(ItemsResult {
+        items: vec![],
+        total_record_count: 0,
+        start_index: 0,
+    })
+}
+
+/// `GET /Items/{itemId}/InstantMix` — dispatch by resolved kind.
+pub async fn item_instant_mix(
+    user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    path: web::Path<String>,
+    query: web::Query<InstantMixQuery>,
+) -> HttpResponse {
+    let raw = path.into_inner();
+    let g = mapping::normalize_guid(&raw);
+    let Some((kind, _native)) = resolve_native(&state, &g).await else {
+        return HttpResponse::NotFound().finish();
+    };
+    // Re-dispatch — each per-kind handler already resolves and validates the
+    // GUID. Wrapping in a Path::from keeps the signatures uniform.
+    let path = web::Path::from(raw);
+    match kind.as_str() {
+        "song" => song_instant_mix(user, state, path, query).await,
+        "album" => album_instant_mix(user, state, path, query).await,
+        "artist" => artist_instant_mix(user, state, path, query).await,
+        "playlist" => playlist_instant_mix(user, state, path, query).await,
+        _ => HttpResponse::NotFound().finish(),
+    }
+}
+
 // ── Images ───────────────────────────────────────────────────────────────────
 
 fn cover_path_for(state: &JellyfinState, filename: &str) -> PathBuf {

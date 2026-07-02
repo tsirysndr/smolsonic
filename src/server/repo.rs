@@ -624,6 +624,23 @@ pub async fn distinct_genres(pool: &Db) -> Result<Vec<(String, i64, i64)>> {
     Ok(rows)
 }
 
+/// Random `size` songs whose native artist_id matches. Backs the artist /
+/// album / song seeds in `/…/InstantMix` — each seed narrows to the artist,
+/// then falls back to genre/random filler in the handler.
+pub async fn random_songs_by_artist(pool: &Db, artist_id: &str, size: i64) -> Result<Vec<Song>> {
+    let rows = sqlx::query_as::<_, Song>(
+        "SELECT id, path, title, artist, artist_id, album, album_id, genre, track_number,
+                disc_number, year, duration_ms, bitrate, filesize, suffix, content_type, cover_art
+         FROM songs WHERE artist_id = ?1
+         ORDER BY RANDOM() LIMIT ?2",
+    )
+    .bind(artist_id)
+    .bind(size)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub async fn songs_by_genre(pool: &Db, genre: &str, count: i64, offset: i64) -> Result<Vec<Song>> {
     let rows = sqlx::query_as::<_, Song>(
         "SELECT id, path, title, artist, artist_id, album, album_id, genre, track_number,
