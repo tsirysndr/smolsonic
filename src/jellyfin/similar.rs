@@ -268,6 +268,97 @@ impl LastfmClient {
             .await?;
         Ok(parse_lastfm_artist_images(&resp))
     }
+
+    /// `artist.getInfo` → biography summary + top tags + Last.fm URL, all
+    /// stashed in `lastfm_artist_info` with a 7-day TTL. Populates the
+    /// `Overview`, `Tags`, and `ExternalUrls` fields of the artist detail
+    /// BaseItemDto.
+    pub async fn artist_info_cached(
+        &self,
+        pool: &Db,
+        artist_native_id: &str,
+        artist_name: &str,
+    ) -> Result<ArtistInfo> {
+        if let Some(cached) = artist_info_cache_get(pool, artist_native_id).await? {
+            return Ok(cached);
+        }
+        let info = self
+            .fetch_artist_info(artist_name)
+            .await
+            .unwrap_or_default();
+        artist_info_cache_put(pool, artist_native_id, &info).await?;
+        Ok(info)
+    }
+
+    async fn fetch_artist_info(&self, artist: &str) -> Result<ArtistInfo> {
+        let resp: LastfmArtistInfoResponse = self
+            .http
+            .get("http://ws.audioscrobbler.com/2.0/")
+            .query(&[
+                ("method", "artist.getinfo"),
+                ("artist", artist),
+                ("autocorrect", "1"),
+                ("api_key", self.api_key.as_str()),
+                ("format", "json"),
+            ])
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(parse_lastfm_artist_info(&resp))
+    }
+}
+
+/// Biography + top-tag payload sourced from Last.fm `artist.getInfo`.
+/// Every field is optional — Last.fm returns partial data for many
+/// artists and we surface whatever we get.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ArtistInfo {
+    pub bio: Option<String>,
+    pub tags: Vec<String>,
+    pub url: Option<String>,
+}
+
+async fn artist_info_cache_get(pool: &Db, artist_id: &str) -> Result<Option<ArtistInfo>> {
+    let row: Option<(Option<String>, String, Option<String>, String)> = sqlx::query_as(
+        "SELECT bio, tags_json, url, fetched_at FROM lastfm_artist_info WHERE artist_id = ?1",
+    )
+    .bind(artist_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((bio, tags_json, url, fetched_at)) = row else {
+        return Ok(None);
+    };
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&fetched_at) {
+        if Utc::now().signed_duration_since(dt.with_timezone(&Utc)) > CACHE_TTL {
+            return Ok(None);
+        }
+    }
+    let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+    Ok(Some(ArtistInfo { bio, tags, url }))
+}
+
+async fn artist_info_cache_put(pool: &Db, artist_id: &str, info: &ArtistInfo) -> Result<()> {
+    let tags_json = serde_json::to_string(&info.tags)?;
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO lastfm_artist_info (artist_id, bio, tags_json, url, fetched_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(artist_id) DO UPDATE SET
+            bio = excluded.bio,
+            tags_json = excluded.tags_json,
+            url = excluded.url,
+            fetched_at = excluded.fetched_at",
+    )
+    .bind(artist_id)
+    .bind(info.bio.as_deref())
+    .bind(tags_json)
+    .bind(info.url.as_deref())
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -292,6 +383,33 @@ struct LastfmArtistInfoResponse {
 struct LastfmArtistInfo {
     #[serde(default, rename = "image")]
     images: Vec<LastfmImage>,
+    #[serde(default)]
+    bio: Option<LastfmArtistBio>,
+    #[serde(default)]
+    tags: Option<LastfmArtistTags>,
+    #[serde(default)]
+    url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LastfmArtistBio {
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    #[allow(dead_code)] // Full-length HTML; we surface `summary` in the DTO instead.
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LastfmArtistTags {
+    #[serde(default)]
+    tag: Vec<LastfmArtistTag>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LastfmArtistTag {
+    #[serde(default)]
+    name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -327,6 +445,30 @@ fn parse_lastfm_artist_images(resp: &LastfmArtistInfoResponse) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn parse_lastfm_artist_info(resp: &LastfmArtistInfoResponse) -> ArtistInfo {
+    let Some(a) = resp.artist.as_ref() else {
+        return ArtistInfo::default();
+    };
+    let bio = a
+        .bio
+        .as_ref()
+        .map(|b| b.summary.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let tags = a
+        .tags
+        .as_ref()
+        .map(|t| {
+            t.tag
+                .iter()
+                .map(|t| t.name.clone())
+                .filter(|n| !n.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let url = a.url.clone().filter(|u| !u.is_empty());
+    ArtistInfo { bio, tags, url }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -697,6 +839,48 @@ mod tests {
         let resp: CoverArtArchiveResponse = serde_json::from_str(payload).unwrap();
         let urls = parse_caa_urls(&resp);
         assert_eq!(urls, vec!["https://caa/front-approved.jpg"]);
+    }
+
+    #[test]
+    fn parses_lastfm_artist_info_bio_tags_url() {
+        let payload = r#"{
+            "artist": {
+                "url": "https://www.last.fm/music/Some+Artist",
+                "bio": {
+                    "summary": "  Some Artist is a band from …  <a href=\"…\">Read more</a> ",
+                    "content": "long full bio HTML here"
+                },
+                "tags": {
+                    "tag": [
+                        {"name": "indie rock", "url": "…"},
+                        {"name": "post-punk", "url": "…"},
+                        {"name": "", "url": "…"}
+                    ]
+                }
+            }
+        }"#;
+        let resp: LastfmArtistInfoResponse = serde_json::from_str(payload).unwrap();
+        let info = parse_lastfm_artist_info(&resp);
+        assert!(info
+            .bio
+            .as_ref()
+            .unwrap()
+            .starts_with("Some Artist is a band"));
+        assert_eq!(info.tags, vec!["indie rock", "post-punk"]);
+        assert_eq!(
+            info.url.as_deref(),
+            Some("https://www.last.fm/music/Some+Artist")
+        );
+    }
+
+    #[test]
+    fn parses_lastfm_artist_info_missing_fields_gives_default() {
+        let payload = r#"{"artist": {}}"#;
+        let resp: LastfmArtistInfoResponse = serde_json::from_str(payload).unwrap();
+        let info = parse_lastfm_artist_info(&resp);
+        assert!(info.bio.is_none());
+        assert!(info.tags.is_empty());
+        assert!(info.url.is_none());
     }
 
     #[test]

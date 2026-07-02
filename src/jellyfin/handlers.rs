@@ -515,6 +515,26 @@ async fn artist_to_dto(state: &JellyfinState, a: &Artist) -> BaseItemDto {
         .await
         .unwrap_or_else(|_| mapping::guid(mapping::KIND_ARTIST, &a.id));
     let user_data = build_user_data(state, &a.id, id.clone()).await;
+    // Fetch bio / tags / Last.fm URL when the plugin is enabled. On error
+    // (network, quota) we silently fall back to a bare DTO so the artist
+    // page still renders.
+    let mut overview: Option<String> = None;
+    let mut tags: Option<Vec<String>> = None;
+    let mut external_urls: Option<Vec<super::dto::ExternalUrl>> = None;
+    if let Some(lf) = &state.similar.lastfm {
+        if let Ok(info) = lf.artist_info_cached(&state.pool, &a.id, &a.name).await {
+            overview = info.bio;
+            if !info.tags.is_empty() {
+                tags = Some(info.tags);
+            }
+            if let Some(url) = info.url {
+                external_urls = Some(vec![super::dto::ExternalUrl {
+                    name: Some("Last.fm".to_string()),
+                    url: Some(url),
+                }]);
+            }
+        }
+    }
     BaseItemDto {
         id: id.clone(),
         server_id: Some(state.server_id.clone()),
@@ -524,6 +544,9 @@ async fn artist_to_dto(state: &JellyfinState, a: &Artist) -> BaseItemDto {
         is_folder: Some(true),
         sort_name: Some(a.name.clone()),
         location_type: Some("FileSystem"),
+        overview,
+        tags,
+        external_urls,
         image_tags: Some(ImageTags {
             primary: Some(a.id.clone()),
         }),
@@ -2887,6 +2910,20 @@ fn ext_for_content_type(ct: &str) -> &'static str {
 // smolsonic derives genres from `songs.genre` (no dedicated table). Filters
 // share that source; Tags / OfficialRatings / AudioLanguages /
 // SubtitleLanguages have no backing data and always come out empty.
+
+pub async fn items_counts(_user: AuthedUser, state: web::Data<JellyfinState>) -> HttpResponse {
+    let song_count = repo::count_songs(&state.pool).await.unwrap_or(0) as i32;
+    let album_count = repo::count_albums(&state.pool).await.unwrap_or(0) as i32;
+    let artist_count = repo::count_artists(&state.pool).await.unwrap_or(0) as i32;
+    let movie_count = repo::count_videos(&state.pool).await.unwrap_or(0) as i32;
+    HttpResponse::Ok().json(super::dto::ItemCounts {
+        song_count,
+        album_count,
+        artist_count,
+        movie_count,
+        ..Default::default()
+    })
+}
 
 pub async fn items_filters(_user: AuthedUser, state: web::Data<JellyfinState>) -> HttpResponse {
     let genres: Vec<String> = repo::distinct_genres(&state.pool)

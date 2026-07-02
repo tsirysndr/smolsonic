@@ -245,9 +245,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             "/Items/{id}/RemoteImages",
             web::get().to(handlers::remote_images),
         )
-        // Filter — modelled after the Jellyfin OpenAPI Filter tag. Backs
-        // the filter/sort dropdown in Findroid / Streamyfin. MUST come
-        // before `/Items/{id}` or actix captures "Filters" as an id.
+        // Filter + item-counts — modelled after the Jellyfin OpenAPI Filter
+        // and Library tags. Both MUST precede `/Items/{id}` or actix
+        // captures the literal segment as an id parameter.
+        .route("/Items/Counts", web::get().to(handlers::items_counts))
         .route("/Items/Filters", web::get().to(handlers::items_filters))
         .route("/Items/Filters2", web::get().to(handlers::items_filters2))
         .route("/Items/{id}", web::get().to(handlers::item_by_id))
@@ -2516,5 +2517,62 @@ mod tests {
         let body: Value = test::call_and_read_body_json(&app, req).await;
         assert_eq!(body["TotalRecordCount"], 1);
         assert_eq!(body["Items"][0]["Type"], "MusicAlbum");
+    }
+
+    /// `/Items/Counts` returns real library stats + the artist detail DTO
+    /// exposes null Overview / Tags / ExternalUrls when the Last.fm plugin
+    /// is disabled (fixture default). Real bio wiring is unit-tested at
+    /// the parser layer since network calls in CI would flake.
+    #[actix_web::test]
+    async fn items_counts_and_artist_detail_without_lastfm() {
+        let dir = tempdir();
+        let state = fixture_state(&dir, &dir, true).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(configure_routes),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/Users/AuthenticateByName")
+            .insert_header((
+                "X-Emby-Authorization",
+                r#"MediaBrowser Client="t", Device="d", DeviceId="i", Version="v""#,
+            ))
+            .set_json(serde_json::json!({"Username":"alice","Pw":"secret"}))
+            .to_request();
+        let auth_body: Value = test::call_and_read_body_json(&app, req).await;
+        let token = auth_body["AccessToken"].as_str().unwrap().to_string();
+
+        // /Items/Counts — fixture has 1 song, 1 album, 1 artist, 1 movie.
+        let req = test::TestRequest::get()
+            .uri("/Items/Counts")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["SongCount"], 1);
+        assert_eq!(body["AlbumCount"], 1);
+        assert_eq!(body["ArtistCount"], 1);
+        assert_eq!(body["MovieCount"], 1);
+        // Empty categories still emit 0, not null.
+        assert_eq!(body["SeriesCount"], 0);
+        assert_eq!(body["EpisodeCount"], 0);
+
+        // Artist detail — with no Last.fm plugin, bio-related fields are null.
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=MusicArtist")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let artists: Value = test::call_and_read_body_json(&app, req).await;
+        let artist_id = artists["Items"][0]["Id"].as_str().unwrap().to_string();
+        let req = test::TestRequest::get()
+            .uri(&format!("/Items/{artist_id}"))
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["Type"], "MusicArtist");
+        assert!(body["Overview"].is_null());
+        assert!(body["Tags"].is_null());
+        assert!(body["ExternalUrls"].is_null());
     }
 }

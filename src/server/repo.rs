@@ -415,6 +415,20 @@ pub async fn count_songs(pool: &Db) -> Result<i64> {
     Ok(n)
 }
 
+pub async fn count_artists(pool: &Db) -> Result<i64> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM artists")
+        .fetch_one(pool)
+        .await?;
+    Ok(n)
+}
+
+pub async fn count_albums(pool: &Db) -> Result<i64> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM albums")
+        .fetch_one(pool)
+        .await?;
+    Ok(n)
+}
+
 pub async fn songs_by_artist(
     pool: &Db,
     artist_id: &str,

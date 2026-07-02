@@ -494,6 +494,22 @@ pub struct BaseItemDto {
     /// in `EntryIds=` for remove/move calls.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub playlist_item_id: Option<String>,
+    /// Free-form tags — smolsonic populates them from Last.fm's top tags on
+    /// artist detail when the plugin is enabled.
+    pub tags: Option<Vec<String>>,
+    /// External-provider links (Last.fm URL on artist detail). Rendered by
+    /// clients as "View on Last.fm" chips beneath the biography.
+    pub external_urls: Option<Vec<ExternalUrl>>,
+}
+
+/// `ExternalUrl` — one row of a `BaseItemDto.ExternalUrls[]` entry, e.g.
+/// `{ Name: "Last.fm", Url: "https://last.fm/music/…" }`. Both fields
+/// nullable per spec.
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "PascalCase")]
+pub struct ExternalUrl {
+    pub name: Option<String>,
+    pub url: Option<String>,
 }
 
 // ── Wrappers used in handlers ───────────────────────────────────────────────
@@ -648,4 +664,24 @@ pub struct QueryFilters {
     pub tags: Vec<String>,
     pub audio_languages: Vec<NameValuePair>,
     pub subtitle_languages: Vec<NameValuePair>,
+}
+
+/// Response body for `GET /Items/Counts` — library-sidebar header stats.
+/// Every field is required non-nullable per spec. smolsonic only populates
+/// the music + movie counts; series/episode/program/box-set/book/etc. stay
+/// at zero.
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "PascalCase")]
+pub struct ItemCounts {
+    pub movie_count: i32,
+    pub series_count: i32,
+    pub episode_count: i32,
+    pub artist_count: i32,
+    pub program_count: i32,
+    pub trailer_count: i32,
+    pub song_count: i32,
+    pub album_count: i32,
+    pub music_video_count: i32,
+    pub box_set_count: i32,
+    pub book_count: i32,
 }

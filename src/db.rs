@@ -111,6 +111,18 @@ async fn migrate(pool: &Db) -> Result<()> {
             PRIMARY KEY (artist_id, provider)
         );
 
+        -- Cache for Last.fm `artist.getInfo` — biography summary, top-tag
+        -- list, and Last.fm URL. Keyed by native artist id. Same 7-day TTL
+        -- semantics as similar_artists_cache but stored in a distinct table
+        -- because the payload shape isn't just a name list.
+        CREATE TABLE IF NOT EXISTS lastfm_artist_info (
+            artist_id   TEXT PRIMARY KEY,
+            bio         TEXT,
+            tags_json   TEXT NOT NULL DEFAULT '[]',
+            url         TEXT,
+            fetched_at  TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS playlists (
             id          TEXT PRIMARY KEY,
             name        TEXT NOT NULL,
