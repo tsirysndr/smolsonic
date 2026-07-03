@@ -9,6 +9,7 @@ pub mod similar;
 use crate::config::JellyfinConfig;
 use crate::db::Db;
 use crate::scanner::ScanProgress;
+use crate::typesense::TypesenseClient;
 use crate::video_scanner::VideoScanProgress;
 use actix_cors::Cors;
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
@@ -34,6 +35,9 @@ pub struct JellyfinState {
     /// are `None` when their `[lastfm]` / `[musicbrainz]` blocks are absent
     /// — the Similar handlers short-circuit to empty in that case.
     pub similar: Arc<similar::SimilarProviders>,
+    /// Optional Typesense search backend for `?searchTerm=`. Falls back to
+    /// FTS5 on error; `None` keeps the FTS5 path.
+    pub typesense: Option<Arc<TypesenseClient>>,
 }
 
 pub async fn start(
@@ -49,6 +53,7 @@ pub async fn start(
     musicbrainz: Option<crate::config::MusicbrainzConfig>,
     music_scan_progress: Arc<ScanProgress>,
     video_scan_progress: Arc<VideoScanProgress>,
+    typesense: Option<Arc<TypesenseClient>>,
 ) -> anyhow::Result<()> {
     let server_id = auth::ensure_server_id(&pool).await?;
     let user_id = mapping::user_guid(&username);
@@ -80,6 +85,7 @@ pub async fn start(
         music_scan_progress,
         video_scan_progress,
         similar: similar_providers,
+        typesense,
     });
 
     tracing::info!(
@@ -714,6 +720,7 @@ mod tests {
             music_scan_progress: Arc::new(ScanProgress::default()),
             video_scan_progress: Arc::new(VideoScanProgress::default()),
             similar: Arc::new(similar::SimilarProviders::new(None, None)),
+            typesense: None,
         }
     }
 

@@ -616,13 +616,14 @@ pub async fn search3(
     let album_offset = q.album_offset.unwrap_or(0);
     let song_offset = q.song_offset.unwrap_or(0);
 
-    let artists = repo::search_artists(&state.pool, &term, artist_limit, artist_offset)
+    let ts = state.typesense.as_deref();
+    let artists = repo::search_artists(&state.pool, &term, artist_limit, artist_offset, ts)
         .await
         .unwrap_or_default();
-    let albums = repo::search_albums(&state.pool, &term, album_limit, album_offset)
+    let albums = repo::search_albums(&state.pool, &term, album_limit, album_offset, ts)
         .await
         .unwrap_or_default();
-    let songs = repo::search_songs(&state.pool, &term, song_limit, song_offset)
+    let songs = repo::search_songs(&state.pool, &term, song_limit, song_offset, ts)
         .await
         .unwrap_or_default();
 
@@ -920,8 +921,9 @@ pub async fn start_scan(
     let music_dir = state.music_dir.clone();
     let covers_dir = state.covers_dir.clone();
     let progress = state.scan_progress.clone();
+    let ts = state.typesense.clone();
     tokio::spawn(async move {
-        if let Err(e) = scanner::scan(pool, music_dir, covers_dir, progress).await {
+        if let Err(e) = scanner::scan(pool, music_dir, covers_dir, progress, ts).await {
             tracing::error!("scan: {e}");
         }
     });
@@ -1586,7 +1588,7 @@ pub async fn get_top_songs(
         return response::ok_json(json!({ "topSongs": { "song": [] } }));
     };
     let count = q.count.unwrap_or(50).clamp(1, 500);
-    let songs = repo::search_songs(&state.pool, artist, count, 0)
+    let songs = repo::search_songs(&state.pool, artist, count, 0, state.typesense.as_deref())
         .await
         .unwrap_or_default();
     let children: Vec<Value> = songs
@@ -1668,13 +1670,14 @@ pub async fn search2(
     let album_offset = q.album_offset.unwrap_or(0);
     let song_offset = q.song_offset.unwrap_or(0);
 
-    let artists = repo::search_artists(&state.pool, &term, artist_limit, artist_offset)
+    let ts = state.typesense.as_deref();
+    let artists = repo::search_artists(&state.pool, &term, artist_limit, artist_offset, ts)
         .await
         .unwrap_or_default();
-    let albums = repo::search_albums(&state.pool, &term, album_limit, album_offset)
+    let albums = repo::search_albums(&state.pool, &term, album_limit, album_offset, ts)
         .await
         .unwrap_or_default();
-    let songs = repo::search_songs(&state.pool, &term, song_limit, song_offset)
+    let songs = repo::search_songs(&state.pool, &term, song_limit, song_offset, ts)
         .await
         .unwrap_or_default();
     let artist_jsons: Vec<Value> = artists.iter().map(|a| artist_to_json(a, 0)).collect();

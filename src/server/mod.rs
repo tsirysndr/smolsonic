@@ -6,6 +6,7 @@ pub mod response;
 use crate::config::Config;
 use crate::db::Db;
 use crate::scanner::ScanProgress;
+use crate::typesense::TypesenseClient;
 use actix_cors::Cors;
 use actix_web::{web, App, HttpServer};
 use std::path::PathBuf;
@@ -18,9 +19,17 @@ pub struct SubsonicState {
     pub music_dir: PathBuf,
     pub covers_dir: PathBuf,
     pub scan_progress: Arc<ScanProgress>,
+    /// Optional Typesense client. When `Some`, `search3`/`search2` route
+    /// through Typesense with fallback to FTS5 on error.
+    pub typesense: Option<Arc<TypesenseClient>>,
 }
 
-pub async fn start(cfg: Config, pool: Db, scan_progress: Arc<ScanProgress>) -> anyhow::Result<()> {
+pub async fn start(
+    cfg: Config,
+    pool: Db,
+    scan_progress: Arc<ScanProgress>,
+    typesense: Option<Arc<TypesenseClient>>,
+) -> anyhow::Result<()> {
     let addr = format!("{}:{}", cfg.host, cfg.port);
     let state = web::Data::new(SubsonicState {
         pool,
@@ -29,6 +38,7 @@ pub async fn start(cfg: Config, pool: Db, scan_progress: Arc<ScanProgress>) -> a
         music_dir: cfg.music_dir.clone(),
         covers_dir: cfg.covers_dir.clone(),
         scan_progress,
+        typesense,
     });
 
     HttpServer::new(move || {
@@ -468,6 +478,7 @@ mod tests {
             music_dir: music_dir.to_path_buf(),
             covers_dir: covers_dir.to_path_buf(),
             scan_progress: Arc::new(ScanProgress::default()),
+            typesense: None,
         }
     }
 

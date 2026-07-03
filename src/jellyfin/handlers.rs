@@ -956,22 +956,23 @@ async fn items_impl(state: web::Data<JellyfinState>, q: ItemsQuery) -> HttpRespo
         let limit = q.limit.unwrap_or(50).max(1);
         let no_filter = q.include_item_types.is_none();
         let mut dtos: Vec<BaseItemDto> = Vec::new();
+        let ts = state.typesense.as_deref();
         if no_filter || includes(&q.include_item_types, "MusicArtist") {
-            if let Ok(rows) = repo::search_artists(&state.pool, term, limit, 0).await {
+            if let Ok(rows) = repo::search_artists(&state.pool, term, limit, 0, ts).await {
                 for a in rows {
                     dtos.push(artist_to_dto(&state, &a).await);
                 }
             }
         }
         if no_filter || includes(&q.include_item_types, "MusicAlbum") {
-            if let Ok(rows) = repo::search_albums(&state.pool, term, limit, 0).await {
+            if let Ok(rows) = repo::search_albums(&state.pool, term, limit, 0, ts).await {
                 for a in rows {
                     dtos.push(album_to_dto(&state, &a).await);
                 }
             }
         }
         if no_filter || includes(&q.include_item_types, "Audio") {
-            if let Ok(rows) = repo::search_songs(&state.pool, term, limit, 0).await {
+            if let Ok(rows) = repo::search_songs(&state.pool, term, limit, 0, ts).await {
                 for s in rows {
                     dtos.push(song_to_dto(&state, &s).await);
                 }
@@ -4123,9 +4124,10 @@ pub async fn trigger_library_scan(
         let music_dir = state.music_dir.clone();
         let covers_dir = state.covers_dir.clone();
         let progress = state.music_scan_progress.clone();
+        let ts = state.typesense.clone();
         tokio::spawn(async move {
             tracing::info!("jellyfin: triggered music scan of {}", music_dir.display());
-            if let Err(e) = crate::scanner::scan(pool, music_dir, covers_dir, progress).await {
+            if let Err(e) = crate::scanner::scan(pool, music_dir, covers_dir, progress, ts).await {
                 tracing::error!("jellyfin-triggered music scan failed: {e}");
             }
         });
@@ -4422,9 +4424,10 @@ pub async fn search_hints(
 
     let limit = q.limit.unwrap_or(20).max(1);
     let mut hints: Vec<Value> = Vec::new();
+    let ts = state.typesense.as_deref();
 
     if want_artist {
-        if let Ok(rows) = repo::search_artists(&state.pool, term, limit, 0).await {
+        if let Ok(rows) = repo::search_artists(&state.pool, term, limit, 0, ts).await {
             for a in rows {
                 let id = mapping::remember_artist(&state.pool, &a)
                     .await
@@ -4441,7 +4444,7 @@ pub async fn search_hints(
         }
     }
     if want_album {
-        if let Ok(rows) = repo::search_albums(&state.pool, term, limit, 0).await {
+        if let Ok(rows) = repo::search_albums(&state.pool, term, limit, 0, ts).await {
             for al in rows {
                 let id = mapping::remember_album(&state.pool, &al)
                     .await
@@ -4460,7 +4463,7 @@ pub async fn search_hints(
         }
     }
     if want_song {
-        if let Ok(rows) = repo::search_songs(&state.pool, term, limit, 0).await {
+        if let Ok(rows) = repo::search_songs(&state.pool, term, limit, 0, ts).await {
             for s in rows {
                 let id = mapping::remember_song(&state.pool, &s)
                     .await

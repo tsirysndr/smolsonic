@@ -1,19 +1,26 @@
 use crate::db::Db;
 use crate::scanner::{gc_album, gc_artist, has_audio_extension, upsert_file};
+use crate::typesense::TypesenseClient;
 use anyhow::Result;
 use notify::{EventKind, RecursiveMode};
 use notify_debouncer_full::new_debouncer;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 const DEBOUNCE: Duration = Duration::from_secs(2);
 
-pub fn start(pool: Db, music_dir: PathBuf, covers_dir: PathBuf) {
+pub fn start(
+    pool: Db,
+    music_dir: PathBuf,
+    covers_dir: PathBuf,
+    typesense: Option<Arc<TypesenseClient>>,
+) {
     let rt = tokio::runtime::Handle::current();
     std::thread::Builder::new()
         .name("library-watcher".into())
         .spawn(move || {
-            if let Err(e) = run(pool, music_dir, covers_dir, rt) {
+            if let Err(e) = run(pool, music_dir, covers_dir, typesense, rt) {
                 tracing::error!("watcher stopped: {e}");
             }
         })
@@ -24,6 +31,7 @@ fn run(
     pool: Db,
     music_dir: PathBuf,
     covers_dir: PathBuf,
+    typesense: Option<Arc<TypesenseClient>>,
     rt: tokio::runtime::Handle,
 ) -> Result<()> {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -39,7 +47,7 @@ fn run(
                         continue;
                     }
                     for path in &ev.event.paths {
-                        rt.block_on(apply_path(&pool, &covers_dir, path));
+                        rt.block_on(apply_path(&pool, &covers_dir, typesense.as_deref(), path));
                     }
                 }
             }
@@ -54,12 +62,17 @@ fn run(
     Ok(())
 }
 
-async fn apply_path(pool: &Db, covers_dir: &Path, path: &Path) {
+async fn apply_path(
+    pool: &Db,
+    covers_dir: &Path,
+    typesense: Option<&TypesenseClient>,
+    path: &Path,
+) {
     if path.is_file() {
         if !has_audio_extension(path) {
             return;
         }
-        match upsert_file(pool, path, covers_dir).await {
+        match upsert_file(pool, path, covers_dir, typesense).await {
             Ok(_) => tracing::info!("watch upsert {}", path.display()),
             Err(e) => tracing::warn!("watch upsert {}: {e}", path.display()),
         }
@@ -72,7 +85,7 @@ async fn apply_path(pool: &Db, covers_dir: &Path, path: &Path) {
 
     let path_str = path.to_string_lossy().to_string();
     if has_audio_extension(path) {
-        match delete_song(pool, &path_str).await {
+        match delete_song(pool, &path_str, typesense).await {
             Ok(true) => tracing::info!("watch delete {path_str}"),
             Ok(false) => {}
             Err(e) => tracing::warn!("watch delete {path_str}: {e}"),
@@ -80,22 +93,22 @@ async fn apply_path(pool: &Db, covers_dir: &Path, path: &Path) {
         return;
     }
 
-    match delete_songs_under(pool, &path_str).await {
+    match delete_songs_under(pool, &path_str, typesense).await {
         Ok(n) if n > 0 => tracing::info!("watch delete {n} songs under {path_str}"),
         Ok(_) => {}
         Err(e) => tracing::warn!("watch delete dir {path_str}: {e}"),
     }
 }
 
-async fn delete_song(pool: &Db, path: &str) -> Result<bool> {
-    let row = sqlx::query_as::<_, (String, String)>(
-        "SELECT album_id, artist_id FROM songs WHERE path = ?1",
+async fn delete_song(pool: &Db, path: &str, typesense: Option<&TypesenseClient>) -> Result<bool> {
+    let row = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT id, album_id, artist_id FROM songs WHERE path = ?1",
     )
     .bind(path)
     .fetch_optional(pool)
     .await?;
 
-    let Some((album_id, artist_id)) = row else {
+    let Some((song_id, album_id, artist_id)) = row else {
         return Ok(false);
     };
 
@@ -104,18 +117,28 @@ async fn delete_song(pool: &Db, path: &str) -> Result<bool> {
         .execute(pool)
         .await?;
 
-    gc_album(pool, &album_id).await?;
-    gc_artist(pool, &artist_id).await?;
+    if let Some(ts) = typesense {
+        if let Err(e) = ts.delete_song(&song_id).await {
+            tracing::warn!("typesense delete song {song_id}: {e}");
+        }
+    }
+
+    gc_album(pool, &album_id, typesense).await?;
+    gc_artist(pool, &artist_id, typesense).await?;
     Ok(true)
 }
 
-async fn delete_songs_under(pool: &Db, dir: &str) -> Result<u64> {
+async fn delete_songs_under(
+    pool: &Db,
+    dir: &str,
+    typesense: Option<&TypesenseClient>,
+) -> Result<u64> {
     let mut prefix = dir.trim_end_matches(std::path::MAIN_SEPARATOR).to_string();
     prefix.push(std::path::MAIN_SEPARATOR);
     let pattern = format!("{}%", escape_like(&prefix));
 
-    let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT album_id, artist_id FROM songs WHERE path LIKE ?1 ESCAPE '\\'")
+    let rows: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT id, album_id, artist_id FROM songs WHERE path LIKE ?1 ESCAPE '\\'")
             .bind(&pattern)
             .fetch_all(pool)
             .await?;
@@ -132,12 +155,17 @@ async fn delete_songs_under(pool: &Db, dir: &str) -> Result<u64> {
 
     let mut seen_albums = std::collections::HashSet::new();
     let mut seen_artists = std::collections::HashSet::new();
-    for (album_id, artist_id) in rows {
+    for (song_id, album_id, artist_id) in rows {
+        if let Some(ts) = typesense {
+            if let Err(e) = ts.delete_song(&song_id).await {
+                tracing::warn!("typesense delete song {song_id}: {e}");
+            }
+        }
         if seen_albums.insert(album_id.clone()) {
-            gc_album(pool, &album_id).await?;
+            gc_album(pool, &album_id, typesense).await?;
         }
         if seen_artists.insert(artist_id.clone()) {
-            gc_artist(pool, &artist_id).await?;
+            gc_artist(pool, &artist_id, typesense).await?;
         }
     }
     Ok(deleted)

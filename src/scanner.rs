@@ -1,4 +1,6 @@
 use crate::db::Db;
+use crate::models::{Album, Artist, Song};
+use crate::typesense::TypesenseClient;
 use anyhow::{Context, Result};
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::picture::{MimeType, Picture};
@@ -36,6 +38,7 @@ pub async fn scan(
     music_dir: PathBuf,
     covers_dir: PathBuf,
     progress: Arc<ScanProgress>,
+    typesense: Option<Arc<TypesenseClient>>,
 ) -> Result<ScanStats> {
     progress.running.store(true, Ordering::SeqCst);
     progress.count.store(0, Ordering::SeqCst);
@@ -54,7 +57,7 @@ pub async fn scan(
         }
         stats.scanned += 1;
         progress.count.store(stats.scanned, Ordering::SeqCst);
-        match process_file(&pool, path, &covers_dir).await {
+        match process_file(&pool, path, &covers_dir, typesense.as_deref()).await {
             Ok(ProcessResult::Inserted) => stats.inserted += 1,
             Ok(ProcessResult::Updated) => stats.updated += 1,
             Ok(ProcessResult::Skipped) => stats.skipped += 1,
@@ -65,7 +68,7 @@ pub async fn scan(
         }
     }
 
-    match reconcile_deletions(&pool).await {
+    match reconcile_deletions(&pool, typesense.as_deref()).await {
         Ok(removed) => stats.removed = removed as usize,
         Err(e) => tracing::warn!("reconcile deletions: {e}"),
     }
@@ -82,18 +85,20 @@ pub async fn scan(
     Ok(stats)
 }
 
-pub async fn reconcile_deletions(pool: &Db) -> Result<u64> {
-    let rows: Vec<(String, String, String)> =
-        sqlx::query_as("SELECT path, album_id, artist_id FROM songs")
+pub async fn reconcile_deletions(pool: &Db, typesense: Option<&TypesenseClient>) -> Result<u64> {
+    let rows: Vec<(String, String, String, String)> =
+        sqlx::query_as("SELECT id, path, album_id, artist_id FROM songs")
             .fetch_all(pool)
             .await?;
 
     let mut missing_paths = Vec::new();
+    let mut missing_song_ids = Vec::new();
     let mut album_ids = std::collections::HashSet::new();
     let mut artist_ids = std::collections::HashSet::new();
-    for (path, album_id, artist_id) in rows {
+    for (id, path, album_id, artist_id) in rows {
         if !Path::new(&path).exists() {
             missing_paths.push(path);
+            missing_song_ids.push(id);
             album_ids.insert(album_id);
             artist_ids.insert(artist_id);
         }
@@ -114,17 +119,29 @@ pub async fn reconcile_deletions(pool: &Db) -> Result<u64> {
     }
     tx.commit().await?;
 
+    if let Some(ts) = typesense {
+        for id in &missing_song_ids {
+            if let Err(e) = ts.delete_song(id).await {
+                tracing::warn!("typesense delete song {id}: {e}");
+            }
+        }
+    }
+
     for album_id in &album_ids {
-        gc_album(pool, album_id).await?;
+        gc_album(pool, album_id, typesense).await?;
     }
     for artist_id in &artist_ids {
-        gc_artist(pool, artist_id).await?;
+        gc_artist(pool, artist_id, typesense).await?;
     }
 
     Ok(deleted)
 }
 
-pub async fn gc_album(pool: &Db, album_id: &str) -> Result<()> {
+pub async fn gc_album(
+    pool: &Db,
+    album_id: &str,
+    typesense: Option<&TypesenseClient>,
+) -> Result<()> {
     let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM songs WHERE album_id = ?1")
         .bind(album_id)
         .fetch_one(pool)
@@ -134,11 +151,20 @@ pub async fn gc_album(pool: &Db, album_id: &str) -> Result<()> {
             .bind(album_id)
             .execute(pool)
             .await?;
+        if let Some(ts) = typesense {
+            if let Err(e) = ts.delete_album(album_id).await {
+                tracing::warn!("typesense delete album {album_id}: {e}");
+            }
+        }
     }
     Ok(())
 }
 
-pub async fn gc_artist(pool: &Db, artist_id: &str) -> Result<()> {
+pub async fn gc_artist(
+    pool: &Db,
+    artist_id: &str,
+    typesense: Option<&TypesenseClient>,
+) -> Result<()> {
     let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM songs WHERE artist_id = ?1")
         .bind(artist_id)
         .fetch_one(pool)
@@ -148,6 +174,11 @@ pub async fn gc_artist(pool: &Db, artist_id: &str) -> Result<()> {
             .bind(artist_id)
             .execute(pool)
             .await?;
+        if let Some(ts) = typesense {
+            if let Err(e) = ts.delete_artist(artist_id).await {
+                tracing::warn!("typesense delete artist {artist_id}: {e}");
+            }
+        }
     }
     Ok(())
 }
@@ -165,11 +196,23 @@ pub fn has_audio_extension(path: &Path) -> bool {
     }
 }
 
-pub async fn upsert_file(pool: &Db, path: &Path, covers_dir: &Path) -> Result<()> {
-    process_file(pool, path, covers_dir).await.map(|_| ())
+pub async fn upsert_file(
+    pool: &Db,
+    path: &Path,
+    covers_dir: &Path,
+    typesense: Option<&TypesenseClient>,
+) -> Result<()> {
+    process_file(pool, path, covers_dir, typesense)
+        .await
+        .map(|_| ())
 }
 
-async fn process_file(pool: &Db, path: &Path, covers_dir: &Path) -> Result<ProcessResult> {
+async fn process_file(
+    pool: &Db,
+    path: &Path,
+    covers_dir: &Path,
+    typesense: Option<&TypesenseClient>,
+) -> Result<ProcessResult> {
     let path_str = path.to_string_lossy().to_string();
     let meta = std::fs::metadata(path)?;
     let mtime = meta
@@ -307,6 +350,50 @@ async fn process_file(pool: &Db, path: &Path, covers_dir: &Path) -> Result<Proce
     .await?;
 
     tx.commit().await?;
+
+    if let Some(ts) = typesense {
+        let artist_row = Artist {
+            id: artist_id.clone(),
+            name: display_artist.clone(),
+        };
+        let album_row = Album {
+            id: album_id.clone(),
+            title: album.clone(),
+            artist: display_artist.clone(),
+            artist_id: artist_id.clone(),
+            year,
+            cover_art: cover_filename.clone(),
+        };
+        let song_row = Song {
+            id: song_id.clone(),
+            path: path_str.clone(),
+            title: title.clone(),
+            artist: artist.clone(),
+            artist_id: artist_id.clone(),
+            album: album.clone(),
+            album_id: album_id.clone(),
+            genre: genre.clone(),
+            track_number: track,
+            disc_number: disc,
+            year: year_to_opt(year),
+            duration_ms,
+            bitrate,
+            filesize,
+            suffix: suffix.clone(),
+            content_type: content_type.clone(),
+            cover_art: cover_filename.clone(),
+        };
+        if let Err(e) = ts.upsert_artist(&artist_row).await {
+            tracing::warn!("typesense upsert artist {}: {e}", artist_row.id);
+        }
+        if let Err(e) = ts.upsert_album(&album_row).await {
+            tracing::warn!("typesense upsert album {}: {e}", album_row.id);
+        }
+        if let Err(e) = ts.upsert_song(&song_row).await {
+            tracing::warn!("typesense upsert song {}: {e}", song_row.id);
+        }
+    }
+
     Ok(if existed {
         ProcessResult::Updated
     } else {

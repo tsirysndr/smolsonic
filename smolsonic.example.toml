@@ -40,3 +40,13 @@ scan_interval_secs = 300
 # agent per their TOS — include app name, version, and contact info.
 # [musicbrainz]
 # user_agent = "smolsonic/0.7.0 ( you@example.com )"
+
+# Optional Typesense search backend. When set, free-text search
+# (/rest/search3, /rest/search2, Jellyfin ?searchTerm=) uses Typesense
+# instead of the built-in SQLite FTS5 index — typo-tolerance, better ranking.
+# Omit the block to keep using FTS5 (the default). Fresh Typesense nodes are
+# reindexed automatically from SQLite on first startup.
+# [typesense]
+# url = "http://localhost:8108"
+# api_key = "changeme"
+# collection_prefix = "smolsonic"  # optional; lets multiple instances share a node

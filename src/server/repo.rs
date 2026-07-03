@@ -1,5 +1,6 @@
 use crate::db::Db;
 use crate::models::{Album, Artist, Playlist, Song, Video};
+use crate::typesense::TypesenseClient;
 use anyhow::Result;
 
 // ── Videos ──────────────────────────────────────────────────────────────────
@@ -500,7 +501,27 @@ fn fts5_match(term: &str) -> Option<String> {
     }
 }
 
-pub async fn search_artists(pool: &Db, term: &str, limit: i64, offset: i64) -> Result<Vec<Artist>> {
+pub async fn search_artists(
+    pool: &Db,
+    term: &str,
+    limit: i64,
+    offset: i64,
+    typesense: Option<&TypesenseClient>,
+) -> Result<Vec<Artist>> {
+    if let Some(ts) = typesense {
+        match ts.search_artist_ids(term, limit, offset).await {
+            Ok(ids) if !ids.is_empty() => {
+                if let Ok(mut rows) = hydrate_artists(pool, &ids).await {
+                    reorder_by_ids(&mut rows, &ids, |a| &a.id);
+                    return Ok(rows);
+                }
+            }
+            Ok(_) => return Ok(Vec::new()),
+            Err(e) => {
+                tracing::warn!("typesense search_artists('{term}'): {e} — falling back to FTS5")
+            }
+        }
+    }
     let Some(q) = fts5_match(term) else {
         let rows = sqlx::query_as::<_, Artist>(
             "SELECT id, name FROM artists ORDER BY name COLLATE NOCASE LIMIT ?1 OFFSET ?2",
@@ -526,7 +547,27 @@ pub async fn search_artists(pool: &Db, term: &str, limit: i64, offset: i64) -> R
     Ok(rows)
 }
 
-pub async fn search_albums(pool: &Db, term: &str, limit: i64, offset: i64) -> Result<Vec<Album>> {
+pub async fn search_albums(
+    pool: &Db,
+    term: &str,
+    limit: i64,
+    offset: i64,
+    typesense: Option<&TypesenseClient>,
+) -> Result<Vec<Album>> {
+    if let Some(ts) = typesense {
+        match ts.search_album_ids(term, limit, offset).await {
+            Ok(ids) if !ids.is_empty() => {
+                if let Ok(mut rows) = hydrate_albums(pool, &ids).await {
+                    reorder_by_ids(&mut rows, &ids, |a| &a.id);
+                    return Ok(rows);
+                }
+            }
+            Ok(_) => return Ok(Vec::new()),
+            Err(e) => {
+                tracing::warn!("typesense search_albums('{term}'): {e} — falling back to FTS5")
+            }
+        }
+    }
     let Some(q) = fts5_match(term) else {
         let rows = sqlx::query_as::<_, Album>(
             "SELECT id, title, artist, artist_id, year, cover_art FROM albums
@@ -553,7 +594,27 @@ pub async fn search_albums(pool: &Db, term: &str, limit: i64, offset: i64) -> Re
     Ok(rows)
 }
 
-pub async fn search_songs(pool: &Db, term: &str, limit: i64, offset: i64) -> Result<Vec<Song>> {
+pub async fn search_songs(
+    pool: &Db,
+    term: &str,
+    limit: i64,
+    offset: i64,
+    typesense: Option<&TypesenseClient>,
+) -> Result<Vec<Song>> {
+    if let Some(ts) = typesense {
+        match ts.search_song_ids(term, limit, offset).await {
+            Ok(ids) if !ids.is_empty() => {
+                if let Ok(mut rows) = hydrate_songs(pool, &ids).await {
+                    reorder_by_ids(&mut rows, &ids, |s| &s.id);
+                    return Ok(rows);
+                }
+            }
+            Ok(_) => return Ok(Vec::new()),
+            Err(e) => {
+                tracing::warn!("typesense search_songs('{term}'): {e} — falling back to FTS5")
+            }
+        }
+    }
     let Some(q) = fts5_match(term) else {
         let rows = sqlx::query_as::<_, Song>(
             "SELECT id, path, title, artist, artist_id, album, album_id, genre, track_number,
@@ -581,6 +642,75 @@ pub async fn search_songs(pool: &Db, term: &str, limit: i64, offset: i64) -> Res
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// Hydrate a Typesense id list back into `Artist` rows. The result is
+/// unordered — callers pass it through `reorder_by_ids` to preserve
+/// Typesense's ranking.
+async fn hydrate_artists(pool: &Db, ids: &[String]) -> Result<Vec<Artist>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = build_in_placeholders(ids.len());
+    let sql = format!("SELECT id, name FROM artists WHERE id IN ({placeholders})");
+    let mut q = sqlx::query_as::<_, Artist>(&sql);
+    for id in ids {
+        q = q.bind(id);
+    }
+    Ok(q.fetch_all(pool).await?)
+}
+
+async fn hydrate_albums(pool: &Db, ids: &[String]) -> Result<Vec<Album>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = build_in_placeholders(ids.len());
+    let sql = format!(
+        "SELECT id, title, artist, artist_id, year, cover_art FROM albums WHERE id IN ({placeholders})"
+    );
+    let mut q = sqlx::query_as::<_, Album>(&sql);
+    for id in ids {
+        q = q.bind(id);
+    }
+    Ok(q.fetch_all(pool).await?)
+}
+
+async fn hydrate_songs(pool: &Db, ids: &[String]) -> Result<Vec<Song>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = build_in_placeholders(ids.len());
+    let sql = format!(
+        "SELECT id, path, title, artist, artist_id, album, album_id, genre, track_number,
+                disc_number, year, duration_ms, bitrate, filesize, suffix, content_type, cover_art
+         FROM songs WHERE id IN ({placeholders})"
+    );
+    let mut q = sqlx::query_as::<_, Song>(&sql);
+    for id in ids {
+        q = q.bind(id);
+    }
+    Ok(q.fetch_all(pool).await?)
+}
+
+fn build_in_placeholders(n: usize) -> String {
+    (1..=n)
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Reorder `rows` in-place so their `id`s match `ids`'s order. Rows whose id
+/// isn't in `ids` land at the end (shouldn't happen but is safe).
+fn reorder_by_ids<T, F>(rows: &mut Vec<T>, ids: &[String], key: F)
+where
+    F: Fn(&T) -> &String,
+{
+    let rank: std::collections::HashMap<&str, usize> = ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (id.as_str(), i))
+        .collect();
+    rows.sort_by_key(|r| rank.get(key(r).as_str()).copied().unwrap_or(usize::MAX));
 }
 
 pub async fn songs_for_album_duration(pool: &Db, album_id: &str) -> Result<i64> {

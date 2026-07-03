@@ -374,6 +374,35 @@ dns-sd -B _subsonic._tcp
 avahi-browse -r _subsonic._tcp
 ```
 
+### Search backends
+
+Free-text search (`/rest/search3`, `/rest/search2`, Jellyfin `?searchTerm=`)
+defaults to SQLite's built-in FTS5 index. Add a `[typesense]` block to swap
+in [Typesense](https://typesense.org/) for typo-tolerant search and better
+ranking without changing any client:
+
+```toml
+[typesense]
+url = "http://localhost:8108"
+api_key = "changeme"
+# collection_prefix = "smolsonic"   # optional
+```
+
+Boot a local Typesense in Docker:
+
+```sh
+docker run -d --name typesense -p 8108:8108 -v typesense-data:/data \
+  typesense/typesense:27.1 --data-dir /data --api-key changeme
+```
+
+On startup smolsonic creates the three collections (`{prefix}_songs`,
+`{prefix}_albums`, `{prefix}_artists`) and — if the songs collection is
+empty — bulk-imports every row from SQLite. From then on, scanner and
+watcher mirror inserts/updates/deletes into Typesense automatically.
+If Typesense is unreachable or misbehaves, search transparently falls back
+to FTS5 so queries keep working. Remove the `[typesense]` block and restart
+to go back to FTS5-only.
+
 ## CLI
 
 ```

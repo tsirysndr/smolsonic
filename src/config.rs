@@ -34,6 +34,12 @@ pub struct Config {
     /// Supplements Last.fm with band-member / collaborator links.
     #[serde(default)]
     pub musicbrainz: Option<MusicbrainzConfig>,
+    /// Optional Typesense search backend. When present, the free-text
+    /// `search3` / `search2` / Jellyfin `?searchTerm=` endpoints use Typesense
+    /// instead of the built-in SQLite FTS5 index. Omit the block to keep
+    /// using FTS5.
+    #[serde(default)]
+    pub typesense: Option<TypesenseConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -44,6 +50,22 @@ pub struct LastfmConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct MusicbrainzConfig {
     pub user_agent: String,
+}
+
+/// Optional Typesense search backend. `url` points at the Typesense HTTP
+/// endpoint (no trailing slash); `api_key` is the admin key so smolsonic can
+/// create collections and import documents. `collection_prefix` lets multiple
+/// smolsonic instances share a single Typesense node without colliding.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TypesenseConfig {
+    pub url: String,
+    pub api_key: String,
+    #[serde(default = "default_typesense_prefix")]
+    pub collection_prefix: String,
+}
+
+fn default_typesense_prefix() -> String {
+    "smolsonic".to_string()
 }
 
 /// Optional video library. Enabled only when this block is present in the
@@ -174,6 +196,14 @@ impl Config {
                 if s3.secret_key.is_empty() {
                     anyhow::bail!("config: s3.secret_key must not be empty");
                 }
+            }
+        }
+        if let Some(ts) = &cfg.typesense {
+            if ts.url.is_empty() {
+                anyhow::bail!("config: typesense.url must not be empty");
+            }
+            if ts.api_key.is_empty() {
+                anyhow::bail!("config: typesense.api_key must not be empty");
             }
         }
         Ok(cfg)

@@ -7,6 +7,7 @@ mod models;
 mod s3;
 mod scanner;
 mod server;
+mod typesense;
 mod video_scanner;
 mod watcher;
 
@@ -45,11 +46,51 @@ async fn main() -> Result<()> {
     let pool = db::init(&cfg.database_path).await?;
     let scan_progress = Arc::new(scanner::ScanProgress::default());
 
+    // Optional Typesense client — construct once, share via `Arc`. On startup
+    // we call `bootstrap()` to create collections, then reindex from SQLite
+    // if the songs collection is empty (fresh Typesense node self-heals).
+    let typesense: Option<Arc<typesense::TypesenseClient>> =
+        if let Some(ts_cfg) = cfg.typesense.as_ref() {
+            let client = Arc::new(typesense::TypesenseClient::new(ts_cfg));
+            match client.bootstrap().await {
+                Ok(()) => {
+                    let client_c = client.clone();
+                    let pool_c = pool.clone();
+                    tokio::spawn(async move {
+                        match client_c.songs_empty().await {
+                            Ok(true) => {
+                                tracing::info!("typesense: songs collection empty, reindexing");
+                                if let Err(e) = client_c.reindex_from_db(&pool_c).await {
+                                    tracing::error!("typesense reindex failed: {e}");
+                                }
+                            }
+                            Ok(false) => {
+                                tracing::info!(
+                                    "typesense: songs collection non-empty, skipping reindex"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::error!("typesense describe songs: {e}");
+                            }
+                        }
+                    });
+                    Some(client)
+                }
+                Err(e) => {
+                    tracing::error!("typesense: bootstrap failed ({e}) — falling back to FTS5");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
     if !args.no_scan {
         let pool_c = pool.clone();
         let music_dir = cfg.music_dir.clone();
         let covers_dir = cfg.covers_dir.clone();
         let progress = scan_progress.clone();
+        let ts_c = typesense.clone();
         tokio::spawn(async move {
             tracing::info!("starting library scan of {}", music_dir.display());
             if let Err(e) = scanner::scan(
@@ -57,15 +98,21 @@ async fn main() -> Result<()> {
                 music_dir.clone(),
                 covers_dir.clone(),
                 progress,
+                ts_c.clone(),
             )
             .await
             {
                 tracing::error!("scan failed: {e}");
             }
-            watcher::start(pool_c, music_dir, covers_dir);
+            watcher::start(pool_c, music_dir, covers_dir, ts_c);
         });
     } else {
-        watcher::start(pool.clone(), cfg.music_dir.clone(), cfg.covers_dir.clone());
+        watcher::start(
+            pool.clone(),
+            cfg.music_dir.clone(),
+            cfg.covers_dir.clone(),
+            typesense.clone(),
+        );
     }
 
     if cfg.scan_interval_secs > 0 {
@@ -73,6 +120,7 @@ async fn main() -> Result<()> {
         let music_dir = cfg.music_dir.clone();
         let covers_dir = cfg.covers_dir.clone();
         let progress = scan_progress.clone();
+        let ts_c = typesense.clone();
         let interval = Duration::from_secs(cfg.scan_interval_secs);
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval);
@@ -90,6 +138,7 @@ async fn main() -> Result<()> {
                     music_dir.clone(),
                     covers_dir.clone(),
                     progress.clone(),
+                    ts_c.clone(),
                 )
                 .await
                 {
@@ -177,6 +226,7 @@ async fn main() -> Result<()> {
                 let musicbrainz = cfg.musicbrainz.clone();
                 let music_progress = scan_progress.clone();
                 let video_progress = video_scan_progress.clone();
+                let ts_c = typesense.clone();
                 actix_web::rt::spawn(async move {
                     if let Err(e) = jellyfin::start(
                         jf_cfg_c,
@@ -191,6 +241,7 @@ async fn main() -> Result<()> {
                         musicbrainz,
                         music_progress,
                         video_progress,
+                        ts_c,
                     )
                     .await
                     {
@@ -247,5 +298,5 @@ async fn main() -> Result<()> {
         None
     };
 
-    server::start(cfg, pool, scan_progress).await
+    server::start(cfg, pool, scan_progress, typesense).await
 }
