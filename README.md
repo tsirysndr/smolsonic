@@ -18,9 +18,29 @@ browse and stream your library.
                 a tiny Subsonic server in Rust
 ```
 
+## Table of contents
+
+- [Features](#features)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Configuration](#configuration)
+  - [S3-compatible API](#s3-compatible-api)
+  - [S3 admin web UI](#s3-admin-web-ui)
+  - [Jellyfin-compatible API](#jellyfin-compatible-api)
+  - [Zeroconf / mDNS](#zeroconf--mdns)
+  - [Search backends](#search-backends)
+  - [ListenBrainz scrobbling](#listenbrainz-scrobbling)
+  - [Last.fm + MusicBrainz plugins](#lastfm--musicbrainz-plugins)
+- [CLI](#cli)
+- [Supported endpoints](#supported-endpoints)
+- [Tested clients](#tested-clients)
+- [How auth works](#how-auth-works)
+- [Development](#development)
+- [License](#license)
+
 ## Features
 
-- One binary, one TOML file, one SQLite database. No external services.
+- One binary, one TOML file, one SQLite database. No external services required.
 - Built on **actix-web 4** with **sqlx** (SQLite) for storage.
 - Library scanner powered by **lofty** — extracts ID3/Vorbis/MP4/etc. tags and
   embedded cover art from `mp3`, `flac`, `ogg`, `opus`, `m4a`, `wav`, and more.
@@ -36,8 +56,18 @@ browse and stream your library.
   library with any S3 client (`aws`, `mc`, `boto3`, `rclone`, …).
 - **Embedded S3 admin web UI** at `/admin/` of the S3 server — browse,
   upload, and delete objects from your browser, no extra service needed.
-- **Optional Jellyfin-compatible sidecar API** on its own port. Works with Finamp, Findroid, Streamyfin,
-  Symfonium, Amcfy Music, and other native Jellyfin clients.
+- **Extensive Jellyfin-compatible sidecar API** on its own port — Favorites,
+  UserData, InstantMix, Lyrics, Similar, RemoteImage, Filter, Genre, Year,
+  Person/Studio, Items/Counts, Suggestions/Resume/Latest rails. Works with
+  Finamp, Findroid, Streamyfin, Symfonium, Amcfy Music, and other native
+  clients.
+- **Optional metadata plugins** — Last.fm and MusicBrainz enable similar
+  artists, cover art from Cover Art Archive, and biographies/tags on artist
+  and album detail pages. All opt-in via TOML.
+- **Optional ListenBrainz scrobbling** — Jellyfin session events and Subsonic
+  `/rest/scrobble` submit `playing_now` + `single` listens following the
+  Last.fm submission rules.
+- **Optional Typesense search backend** with automatic FTS5 fallback.
 - **Optional video library** scanned alongside music — direct-play streaming,
   ffmpeg-based thumbnail generation when no sibling poster exists.
 - **Zeroconf / mDNS** announcement so clients on the LAN discover the
@@ -186,19 +216,23 @@ enabled       = true
 instance_name = "smolsonic"
 ```
 
-| Key             | Purpose                                                   |
-| --------------- | --------------------------------------------------------- |
-| `music_dir`     | Root of your library. Walked recursively.                 |
-| `username`      | The single Subsonic user.                                 |
-| `password`      | Cleartext on disk; used for both token and plaintext auth.|
-| `port`          | TCP port to bind.                                         |
-| `host`          | Interface to bind (use `127.0.0.1` to keep it local).     |
-| `database_path` | Path to the SQLite file. Created if missing.              |
-| `covers_dir`    | Where extracted album art is cached.                      |
-| `[s3]`          | Optional S3 server section (see below).                   |
-| `[jellyfin]`    | Optional Jellyfin-compatible API on its own port.         |
-| `[video]`       | Optional video library, surfaced through the Jellyfin API.|
-| `[mdns]`        | Optional Zeroconf/mDNS broadcast (see below).             |
+| Key              | Purpose                                                     |
+| ---------------- | ----------------------------------------------------------- |
+| `music_dir`      | Root of your library. Walked recursively.                   |
+| `username`       | The single Subsonic user.                                   |
+| `password`       | Cleartext on disk; used for both token and plaintext auth.  |
+| `port`           | TCP port to bind.                                           |
+| `host`           | Interface to bind (use `127.0.0.1` to keep it local).       |
+| `database_path`  | Path to the SQLite file. Created if missing.                |
+| `covers_dir`     | Where extracted album art is cached.                        |
+| `[s3]`           | Optional S3 server section (see below).                     |
+| `[jellyfin]`     | Optional Jellyfin-compatible API on its own port.           |
+| `[video]`        | Optional video library, surfaced through the Jellyfin API.  |
+| `[mdns]`         | Optional Zeroconf/mDNS broadcast (see below).               |
+| `[typesense]`    | Optional Typesense search backend (falls back to FTS5).     |
+| `[lastfm]`       | Optional Last.fm plugin — similar artists + bios + tags.    |
+| `[musicbrainz]`  | Optional MusicBrainz plugin — cover art + linked artists.   |
+| `[listenbrainz]` | Optional ListenBrainz scrobble target.                      |
 
 ### S3-compatible API
 
@@ -270,35 +304,69 @@ disabled unless `[jellyfin]` is set in the TOML.
 port = 8096
 ```
 
-What it implements:
+What it implements (grouped by [Jellyfin OpenAPI](https://api.jellyfin.org/) tag):
 
-- `/System/Info` / `/System/Info/Public` — spoofs `Version: 10.11.x` so
-  modern clients accept it (they refuse anything older).
-- `/Users/AuthenticateByName` — bridges to the existing `username`/`password`
-  in your TOML, issues an opaque token persisted in SQLite. Tokens are accepted
-  via `X-Emby-Token`, `Authorization: MediaBrowser Token=…`, and `?api_key=`
-  for streaming URLs.
-- `/Users/Public`, `/Users/{id}`, `/Users/{id}/Views`, `/UserViews`,
-  `/Library/MediaFolders`, `/Library/VirtualFolders` — library/collection
-  enumeration.
-- `/Items`, `/Users/{id}/Items` — main browse endpoint. Handles `parentId`,
-  `includeItemTypes` (`Audio`/`MusicAlbum`/`MusicArtist`/`Movie`), `searchTerm`,
-  `albumArtistIds`/`artistIds`, `ids`, pagination. Accepts both camelCase and
-  PascalCase parameter names, and repeated keys
-  (`?includeItemTypes=Folder&includeItemTypes=Movie`).
-- `/Items/{id}` (single-item lookup), `/Items/{id}/Images/Primary` (cover art),
-  `/Items/{id}/File`, `/Items/{id}/PlaybackInfo`.
-- `/Audio/{id}/stream`, `/Audio/{id}/stream.{ext}`, `/Audio/{id}/universal`
-  — direct-play audio streaming, Range-aware.
-- `/Videos/{id}/stream`, `/Videos/{id}/stream.{ext}` — direct-play video.
-- `/Search/Hints` and `/Items?searchTerm=…` — backed by the same FTS5 index
-  the Subsonic side uses, plus a LIKE search for videos.
-- `/Sessions/Playing/{,Progress,Stopped}`, `/Sessions/Capabilities/Full` —
-  scrobble + capability registration acks.
-- `/ScheduledTasks/Running/{id}` and `/Library/Refresh` — both kick off a
-  background music + video rescan and return 204 immediately.
-- `/Shows/NextUp`, `/Shows/Upcoming`, `/UserItems/{Resume,Latest}`,
-  `/Items/{Suggestions,Resume,Latest}` — stubbed for client compatibility.
+- **System / auth** — `/System/Info(/Public)` spoofs `Version: 10.11.x` so
+  modern clients accept it; `/Users/AuthenticateByName` bridges to the TOML
+  `username`/`password` and issues an opaque token persisted in SQLite.
+  Tokens accepted via `X-Emby-Token`, `Authorization: MediaBrowser Token=…`,
+  and `?api_key=` for streaming URLs. `/Users/Public`, `/Users/{id}`,
+  `/Users/{id}/Views`, `/UserViews`, `/Library/MediaFolders`,
+  `/Library/VirtualFolders`.
+- **Items browsing** — `/Items`, `/Users/{id}/Items` handle `parentId`,
+  `includeItemTypes`, `mediaTypes`, `searchTerm`, `albumArtistIds`/`artistIds`,
+  `ids`, and pagination. Accept both camelCase and PascalCase parameter
+  names, and repeated keys (`?includeItemTypes=Folder&includeItemTypes=Movie`).
+  Also `/Items/{id}` single-item lookup, `/Items/{id}/File`,
+  `/Items/{id}/PlaybackInfo`, `/Items/Latest`, `/Items/Prefixes`,
+  `/Items/Filters`, `/Items/Filters2`, `/Items/Counts`.
+- **Home rails** — `/Items/{Suggestions,Resume,Latest}`,
+  `/UserItems/{Resume,Latest}`, `/Users/{id}/Items/{Resume,Latest,Suggestions}`,
+  `/Users/{id}/Views/{view}/Latest`. Resume reads back items with a saved
+  playback position; Suggestions returns random albums (or songs when the
+  client asks for `?IncludeItemTypes=Audio`).
+- **Artists / Genres / Years / Persons / Studios** —
+  `/Artists(/AlbumArtists)`, `/Artists/{name}`, `/Artists/Prefixes`,
+  `/Genres(/{name})`, `/MusicGenres(/{name})`, `/Years(/{year})`,
+  `/Persons(/{name})`, `/Studios(/{name})`. `parentId=<genre|year guid>`
+  drills down to the matching songs or albums.
+- **Playlists** — `/Playlists` list/create, `/Playlists/{id}` get/update/
+  delete, `/Playlists/{id}/Items` list/add/remove/reorder via
+  `PlaylistItemId`.
+- **UserData / Favorites / PlayedItems / Rating** —
+  `GET`/`POST /UserItems/{id}/UserData`, `POST`/`DELETE /UserFavoriteItems/{id}`,
+  `POST`/`DELETE /UserPlayedItems/{id}`, `POST`/`DELETE /UserItems/{id}/Rating`,
+  plus the legacy `/Users/{uid}/…` variants that older clients still call.
+- **InstantMix** — `/Albums/{id}/InstantMix`, `/Artists/{id}/InstantMix`,
+  `/Songs/{id}/InstantMix`, `/Playlists/{id}/InstantMix`,
+  `/MusicGenres/{name}/InstantMix`, `/Items/{id}/InstantMix`. Three-tier
+  fallback (same artist → same genre → random library-wide) so the mix stays
+  populated on small libraries.
+- **Similar** — `/Albums/{id}/Similar`, `/Artists/{id}/Similar`,
+  `/Movies/{id}/Similar`, `/Trailers/{id}/Similar`, `/Shows/{id}/Similar`,
+  `/Items/{id}/Similar`. Powered by the Last.fm + MusicBrainz plugins when
+  enabled; empty when neither is configured.
+- **Lyrics** — `GET`/`POST`/`DELETE /Audio/{id}/Lyrics` reads and writes
+  a `song.lrc` sidecar next to the audio file (case-insensitive). Recognises
+  standard LRC metadata (`ar/al/ti/au/length/by/offset/re/ve`), timestamped
+  lines, stacked timestamps, and plain-text fallback (`IsSynced=false`).
+- **RemoteImage** — `/Items/{id}/RemoteImages`, `/RemoteImages/Providers`,
+  `/RemoteImages/Download`. Backed by Last.fm `album.getInfo` and the
+  MusicBrainz Cover Art Archive. Downloaded bytes land in `covers_dir` and
+  update `albums.cover_art` so the existing image serving picks them up.
+- **Streaming** — `/Audio/{id}/{stream,stream.{ext},universal}` and
+  `/Videos/{id}/{stream,stream.{ext}}`, all Range-aware, direct-play.
+- **Search** — `/Search/Hints` and `/Items?searchTerm=…`, backed by FTS5
+  or Typesense (see [Search backends](#search-backends)).
+- **Sessions / scrobble** — `/Sessions/Playing/{,Progress,Stopped}`
+  submit ListenBrainz `playing_now` and (on stop) a full listen when the
+  track qualifies. See [ListenBrainz scrobbling](#listenbrainz-scrobbling).
+- **Scheduled tasks** — `/ScheduledTasks/Running/{id}` and `/Library/Refresh`
+  kick off a background music + video rescan and return 204 immediately.
+- **Compatibility stubs** — `/Shows/NextUp`, `/Shows/Upcoming`,
+  `/Items/{id}/Ancestors`, `/Items/{id}/SpecialFeatures`,
+  `/Users/{uid}/Items/{id}/Intros`, `/DisplayPreferences/{id}` return
+  empty results so clients that probe them stop retrying.
 
 Item IDs are deterministic 32-char SHA-256-prefixed UUIDs (dashed). The
 mapping from these GUIDs back to your native `ar-…`/`al-…`/`so-…`/`vi-…`
@@ -403,6 +471,63 @@ If Typesense is unreachable or misbehaves, search transparently falls back
 to FTS5 so queries keep working. Remove the `[typesense]` block and restart
 to go back to FTS5-only.
 
+### ListenBrainz scrobbling
+
+Add a `[listenbrainz]` block to submit listens to
+[ListenBrainz](https://listenbrainz.org/) (or a self-hosted instance).
+Fires on Jellyfin `/Sessions/Playing` (`playing_now` update) and on
+`/Sessions/Playing/Stopped` (full `single` listen when the track qualifies).
+Also honours Subsonic `/rest/scrobble?submission=<bool>`.
+
+```toml
+[listenbrainz]
+token   = "your-listenbrainz-user-token"        # required — from listenbrainz.org/profile
+api_url = "https://api.listenbrainz.org"        # optional — override for self-hosted
+```
+
+Qualifying rules mirror the Last.fm submission spec:
+
+- Track must be **longer than 30 seconds**.
+- Playback has reached the **halfway point**, OR **4 minutes** have been
+  played, whichever comes first.
+
+Network / auth errors are logged at `warn` and swallowed — a ListenBrainz
+outage never blocks playback.
+
+### Last.fm + MusicBrainz plugins
+
+Two independent, opt-in plugins add real metadata to the Jellyfin sidecar.
+Enable one, both, or neither — every dependent endpoint responds correctly
+when they're off (empty results / null fields, per the Jellyfin spec).
+
+```toml
+# Powers /…/Similar (artist.getSimilar), RemoteImages (album.getInfo),
+# and Overview/Tags/ExternalUrls on artist + album detail (artist.getInfo,
+# album.getInfo). Register a free API key at last.fm/api.
+[lastfm]
+api_key = "your-lastfm-api-key"
+
+# Supplements Last.fm with linked artists (band members, collaborators)
+# from /ws/2/artist?inc=artist-rels, plus cover art from the Cover Art
+# Archive. MusicBrainz requires a descriptive user agent per their TOS.
+[musicbrainz]
+user_agent = "smolsonic/0.8.0 ( you@example.com )"
+```
+
+What each enables:
+
+| Endpoint                              | Last.fm | MusicBrainz |
+| ------------------------------------- | :-----: | :---------: |
+| `/…/Similar` (artist / album / items) |    ✓    |      ✓      |
+| `/Items/{id}/RemoteImages` (covers)   |    ✓    |      ✓      |
+| Artist detail bio + tags + URL        |    ✓    |             |
+| Album detail wiki + tags + URL        |    ✓    |             |
+
+Results are cached in dedicated SQLite tables (`similar_artists_cache`,
+`lastfm_artist_info`, `lastfm_album_info`) with a 7-day TTL so client
+re-opens don't pound the remote. MusicBrainz calls are globally
+rate-limited to one request per second per their guidelines.
+
 ## CLI
 
 ```
@@ -451,7 +576,9 @@ envelope (`{"subsonic-response": …}`).
 
 **Artist / album info** — `getArtistInfo`, `getArtistInfo2`, `getAlbumInfo`,
 `getAlbumInfo2`, `getSimilarSongs`, `getSimilarSongs2`, `getTopSongs`,
-`getLyrics`. These return minimal stub shapes (no Last.fm or external lookups).
+`getLyrics`. Return minimal stub shapes on the Subsonic side; rich metadata
+(bio, tags, similar artists, cover art) is currently only wired into the
+Jellyfin sidecar via the [Last.fm / MusicBrainz plugins](#lastfm--musicbrainz-plugins).
 
 `GET /` returns a plain-text index of every endpoint and its query params.
 
