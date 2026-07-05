@@ -60,6 +60,12 @@ impl ListenBrainzClient {
     /// playback start; ListenBrainz treats it as a live-status update and
     /// doesn't persist it to the user's history.
     pub async fn submit_playing_now(&self, meta: TrackMeta<'_>) {
+        tracing::info!(
+            artist = meta.artist,
+            track = meta.track,
+            album = meta.album,
+            "listenbrainz: submitting playing_now"
+        );
         let body = SubmitListensBody {
             listen_type: "playing_now",
             payload: vec![ListenPayload {
@@ -77,6 +83,13 @@ impl ListenBrainzClient {
     /// unix timestamp representing playback START, per ListenBrainz's own
     /// documentation.
     pub async fn submit_listen(&self, meta: TrackMeta<'_>, listened_at: i64) {
+        tracing::info!(
+            artist = meta.artist,
+            track = meta.track,
+            album = meta.album,
+            listened_at,
+            "listenbrainz: submitting listen"
+        );
         let body = SubmitListensBody {
             listen_type: "single",
             payload: vec![ListenPayload {
@@ -91,6 +104,11 @@ impl ListenBrainzClient {
 
     async fn post_listen(&self, body: &SubmitListensBody<'_>) -> Result<()> {
         let url = format!("{}/1/submit-listens", self.api_url);
+        tracing::debug!(
+            url,
+            body = %serde_json::to_string(body).unwrap_or_default(),
+            "listenbrainz: POST /1/submit-listens"
+        );
         let resp = self
             .http
             .post(&url)
@@ -99,10 +117,16 @@ impl ListenBrainzClient {
             .send()
             .await?;
         let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
             anyhow::bail!("HTTP {status}: {text}");
         }
+        tracing::info!(
+            listen_type = body.listen_type,
+            status = %status,
+            response = %text,
+            "listenbrainz: submit-listens accepted"
+        );
         Ok(())
     }
 }

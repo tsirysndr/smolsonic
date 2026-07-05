@@ -1299,6 +1299,12 @@ pub async fn scrobble(
                 album,
             };
             let is_submission = q.submission.unwrap_or(true);
+            tracing::info!(
+                track = %song.title,
+                is_submission,
+                time_ms = q.time,
+                "subsonic: /rest/scrobble"
+            );
             if is_submission {
                 // Subsonic `time` is ms since epoch (playback start). Fall
                 // back to now-minus-duration when the client omits it.

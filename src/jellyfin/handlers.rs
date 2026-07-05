@@ -3704,6 +3704,7 @@ pub async fn sessions_playing(
 ) -> HttpResponse {
     if let Some(client) = state.scrobble.as_ref() {
         let body = body.into_inner();
+        tracing::debug!(body = %body, "jellyfin: /Sessions/Playing");
         if let Some((song, _)) = playback_song(&state, &body).await {
             let album = if song.album.is_empty() {
                 None
@@ -3743,6 +3744,7 @@ pub async fn sessions_playing_stopped(
 ) -> HttpResponse {
     if let Some(client) = state.scrobble.as_ref() {
         let body = body.into_inner();
+        tracing::debug!(body = %body, "jellyfin: /Sessions/Playing/Stopped");
         if let Some((song, position_ticks)) = playback_song(&state, &body).await {
             let duration_secs = song.duration_ms / 1000;
             // Prefer the client-reported position; fall back to the track's
@@ -3752,7 +3754,15 @@ pub async fn sessions_playing_stopped(
             } else {
                 duration_secs
             };
-            if crate::scrobble::qualifies_for_scrobble(position_secs, duration_secs) {
+            let qualifies = crate::scrobble::qualifies_for_scrobble(position_secs, duration_secs);
+            tracing::info!(
+                track = %song.title,
+                position_secs,
+                duration_secs,
+                qualifies,
+                "jellyfin: playback stopped — scrobble decision"
+            );
+            if qualifies {
                 let album = if song.album.is_empty() {
                     None
                 } else {
@@ -3779,21 +3789,43 @@ pub async fn sessions_playing_stopped(
 /// item back to a `Song`. Returns `None` for non-song items (movies etc.)
 /// or unknown GUIDs.
 async fn playback_song(state: &JellyfinState, body: &Value) -> Option<(crate::models::Song, i64)> {
-    let item_id = body
+    let Some(item_id) = body
         .get("ItemId")
         .and_then(Value::as_str)
-        .or_else(|| body.get("itemId").and_then(Value::as_str))?;
+        .or_else(|| body.get("itemId").and_then(Value::as_str))
+    else {
+        tracing::warn!("jellyfin: playback report has no ItemId — skipping scrobble");
+        return None;
+    };
     let position_ticks = body
         .get("PositionTicks")
         .and_then(Value::as_i64)
         .or_else(|| body.get("positionTicks").and_then(Value::as_i64))
         .unwrap_or(0);
     let g = mapping::normalize_guid(item_id);
-    let (kind, native) = resolve_native(state, &g).await?;
+    let Some((kind, native)) = resolve_native(state, &g).await else {
+        tracing::warn!(
+            item_id,
+            "jellyfin: playback item not found — skipping scrobble"
+        );
+        return None;
+    };
     if kind != "song" {
+        tracing::debug!(
+            item_id,
+            kind,
+            "jellyfin: playback item is not a song — skipping scrobble"
+        );
         return None;
     }
-    let song = repo::find_song(&state.pool, &native).await.ok().flatten()?;
+    let Some(song) = repo::find_song(&state.pool, &native).await.ok().flatten() else {
+        tracing::warn!(
+            item_id,
+            native,
+            "jellyfin: song row missing — skipping scrobble"
+        );
+        return None;
+    };
     Some((song, position_ticks))
 }
 
