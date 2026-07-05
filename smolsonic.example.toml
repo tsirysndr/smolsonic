@@ -50,3 +50,13 @@ scan_interval_secs = 300
 # url = "http://localhost:8108"
 # api_key = "changeme"
 # collection_prefix = "smolsonic"  # optional; lets multiple instances share a node
+
+# Optional ListenBrainz scrobbling. When set, smolsonic submits `playing_now`
+# on Jellyfin /Sessions/Playing (and Subsonic /rest/scrobble?submission=false)
+# and a full listen on session-stop following the Last.fm scrobble rules:
+# the track must be longer than 30 seconds AND played past the halfway
+# point OR for at least 4 minutes. Get a token at listenbrainz.org/profile.
+# Set api_url to your own for a self-hosted instance.
+# [listenbrainz]
+# token = "your-listenbrainz-user-token"
+# api_url = "https://api.listenbrainz.org"  # optional; official default

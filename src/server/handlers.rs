@@ -1252,11 +1252,67 @@ pub async fn unstar(
 
 // ── Scrobble / NowPlaying ─────────────────────────────────────────────────────
 
-pub async fn scrobble(state: web::Data<SubsonicState>, query: web::Query<IdParam>) -> HttpResponse {
+#[derive(Debug, Deserialize)]
+pub struct ScrobbleParams {
+    pub u: Option<String>,
+    pub p: Option<String>,
+    pub t: Option<String>,
+    pub s: Option<String>,
+    pub f: Option<String>,
+    pub id: Option<String>,
+    /// Milliseconds since epoch; when omitted we compute `now - duration`.
+    pub time: Option<i64>,
+    /// `false` → playing-now update; anything else (default) → full listen.
+    /// Subsonic spec: default is `true`.
+    pub submission: Option<bool>,
+}
+
+pub async fn scrobble(
+    state: web::Data<SubsonicState>,
+    query: web::Query<ScrobbleParams>,
+) -> HttpResponse {
     let q = query.into_inner();
-    if let Some(r) = require_auth(&state, &CommonLike::from_id(&q)) {
+    let common = IdParam {
+        u: q.u.clone(),
+        p: q.p.clone(),
+        t: q.t.clone(),
+        s: q.s.clone(),
+        f: q.f.clone(),
+        id: q.id.clone(),
+    };
+    if let Some(r) = require_auth(&state, &CommonLike::from_id(&common)) {
         return r;
     }
+
+    // Forward to ListenBrainz when a plugin is configured. Failure is
+    // silent to the client — scrobbling is best-effort.
+    if let (Some(client), Some(id)) = (state.scrobble.as_ref(), q.id.as_deref()) {
+        if let Ok(Some(song)) = repo::find_song(&state.pool, id).await {
+            let album = if song.album.is_empty() {
+                None
+            } else {
+                Some(song.album.as_str())
+            };
+            let meta = crate::scrobble::TrackMeta {
+                artist: &song.artist,
+                track: &song.title,
+                album,
+            };
+            let is_submission = q.submission.unwrap_or(true);
+            if is_submission {
+                // Subsonic `time` is ms since epoch (playback start). Fall
+                // back to now-minus-duration when the client omits it.
+                let listened_at = q
+                    .time
+                    .map(|ms| ms / 1000)
+                    .unwrap_or_else(|| chrono::Utc::now().timestamp() - song.duration_ms / 1000);
+                client.submit_listen(meta, listened_at).await;
+            } else {
+                client.submit_playing_now(meta).await;
+            }
+        }
+    }
+
     response::ok_json(json!({}))
 }
 

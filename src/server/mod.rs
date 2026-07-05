@@ -6,6 +6,7 @@ pub mod response;
 use crate::config::Config;
 use crate::db::Db;
 use crate::scanner::ScanProgress;
+use crate::scrobble::ListenBrainzClient;
 use crate::typesense::TypesenseClient;
 use actix_cors::Cors;
 use actix_web::{web, App, HttpServer};
@@ -22,6 +23,9 @@ pub struct SubsonicState {
     /// Optional Typesense client. When `Some`, `search3`/`search2` route
     /// through Typesense with fallback to FTS5 on error.
     pub typesense: Option<Arc<TypesenseClient>>,
+    /// Optional ListenBrainz scrobble target. `None` → `/rest/scrobble` is
+    /// still ack'd but no listens are submitted.
+    pub scrobble: Option<Arc<ListenBrainzClient>>,
 }
 
 pub async fn start(
@@ -29,6 +33,7 @@ pub async fn start(
     pool: Db,
     scan_progress: Arc<ScanProgress>,
     typesense: Option<Arc<TypesenseClient>>,
+    scrobble: Option<Arc<ListenBrainzClient>>,
 ) -> anyhow::Result<()> {
     let addr = format!("{}:{}", cfg.host, cfg.port);
     let state = web::Data::new(SubsonicState {
@@ -39,6 +44,7 @@ pub async fn start(
         covers_dir: cfg.covers_dir.clone(),
         scan_progress,
         typesense,
+        scrobble,
     });
 
     HttpServer::new(move || {
@@ -479,6 +485,7 @@ mod tests {
             covers_dir: covers_dir.to_path_buf(),
             scan_progress: Arc::new(ScanProgress::default()),
             typesense: None,
+            scrobble: None,
         }
     }
 

@@ -40,6 +40,27 @@ pub struct Config {
     /// using FTS5.
     #[serde(default)]
     pub typesense: Option<TypesenseConfig>,
+    /// Optional ListenBrainz scrobble target. When present, playback events
+    /// (Jellyfin `/Sessions/Playing[/Stopped]` and Subsonic `/rest/scrobble`)
+    /// submit `playing_now` + `single` listens to ListenBrainz. Follows the
+    /// same rules Last.fm's scrobble spec uses: track > 30s AND
+    /// (position > half OR position > 4 min) qualifies as a scrobble.
+    #[serde(default)]
+    pub listenbrainz: Option<ListenBrainzConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ListenBrainzConfig {
+    /// User token from https://listenbrainz.org/profile.
+    pub token: String,
+    /// API base URL. Defaults to the official ListenBrainz instance; set to
+    /// your own for a self-hosted deployment.
+    #[serde(default = "default_listenbrainz_api_url")]
+    pub api_url: String,
+}
+
+fn default_listenbrainz_api_url() -> String {
+    "https://api.listenbrainz.org".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -204,6 +225,14 @@ impl Config {
             }
             if ts.api_key.is_empty() {
                 anyhow::bail!("config: typesense.api_key must not be empty");
+            }
+        }
+        if let Some(lb) = &cfg.listenbrainz {
+            if lb.token.is_empty() {
+                anyhow::bail!("config: listenbrainz.token must not be empty");
+            }
+            if lb.api_url.is_empty() {
+                anyhow::bail!("config: listenbrainz.api_url must not be empty");
             }
         }
         Ok(cfg)

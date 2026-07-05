@@ -3694,16 +3694,107 @@ pub async fn sessions_list(_user: AuthedUser) -> HttpResponse {
     HttpResponse::Ok().json(Vec::<Value>::new())
 }
 
-pub async fn sessions_playing(_user: AuthedUser, _body: web::Json<Value>) -> HttpResponse {
+/// `POST /Sessions/Playing` — client informs the server that playback has
+/// started. When a ListenBrainz plugin is configured, we submit a
+/// `playing_now` update so live-status widgets can show the current track.
+pub async fn sessions_playing(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    body: web::Json<Value>,
+) -> HttpResponse {
+    if let Some(client) = state.scrobble.as_ref() {
+        let body = body.into_inner();
+        if let Some((song, _)) = playback_song(&state, &body).await {
+            let album = if song.album.is_empty() {
+                None
+            } else {
+                Some(song.album.as_str())
+            };
+            client
+                .submit_playing_now(super::super::scrobble::TrackMeta {
+                    artist: &song.artist,
+                    track: &song.title,
+                    album,
+                })
+                .await;
+        }
+    }
     HttpResponse::NoContent().finish()
 }
 
-pub async fn sessions_playing_progress(_user: AuthedUser, _body: web::Json<Value>) -> HttpResponse {
+/// `POST /Sessions/Playing/Progress` — periodic position update from the
+/// client during playback. We don't need to act on these: `Playing` already
+/// sent the now-playing, and `Stopped` will decide whether to scrobble.
+pub async fn sessions_playing_progress(
+    _user: AuthedUser,
+    _state: web::Data<JellyfinState>,
+    _body: web::Json<Value>,
+) -> HttpResponse {
     HttpResponse::NoContent().finish()
 }
 
-pub async fn sessions_playing_stopped(_user: AuthedUser, _body: web::Json<Value>) -> HttpResponse {
+/// `POST /Sessions/Playing/Stopped` — playback finished (or was aborted).
+/// This is where we apply the Last.fm scrobble rules and, if they're met,
+/// submit a `single` listen to ListenBrainz.
+pub async fn sessions_playing_stopped(
+    _user: AuthedUser,
+    state: web::Data<JellyfinState>,
+    body: web::Json<Value>,
+) -> HttpResponse {
+    if let Some(client) = state.scrobble.as_ref() {
+        let body = body.into_inner();
+        if let Some((song, position_ticks)) = playback_song(&state, &body).await {
+            let duration_secs = song.duration_ms / 1000;
+            // Prefer the client-reported position; fall back to the track's
+            // duration when it's absent (some clients omit the field on stop).
+            let position_secs = if position_ticks > 0 {
+                position_ticks / (TICKS_PER_MS * 1000)
+            } else {
+                duration_secs
+            };
+            if crate::scrobble::qualifies_for_scrobble(position_secs, duration_secs) {
+                let album = if song.album.is_empty() {
+                    None
+                } else {
+                    Some(song.album.as_str())
+                };
+                let listened_at = chrono::Utc::now().timestamp() - position_secs;
+                client
+                    .submit_listen(
+                        super::super::scrobble::TrackMeta {
+                            artist: &song.artist,
+                            track: &song.title,
+                            album,
+                        },
+                        listened_at,
+                    )
+                    .await;
+            }
+        }
+    }
     HttpResponse::NoContent().finish()
+}
+
+/// Extract `{ItemId, PositionTicks}` from the session body and resolve the
+/// item back to a `Song`. Returns `None` for non-song items (movies etc.)
+/// or unknown GUIDs.
+async fn playback_song(state: &JellyfinState, body: &Value) -> Option<(crate::models::Song, i64)> {
+    let item_id = body
+        .get("ItemId")
+        .and_then(Value::as_str)
+        .or_else(|| body.get("itemId").and_then(Value::as_str))?;
+    let position_ticks = body
+        .get("PositionTicks")
+        .and_then(Value::as_i64)
+        .or_else(|| body.get("positionTicks").and_then(Value::as_i64))
+        .unwrap_or(0);
+    let g = mapping::normalize_guid(item_id);
+    let (kind, native) = resolve_native(state, &g).await?;
+    if kind != "song" {
+        return None;
+    }
+    let song = repo::find_song(&state.pool, &native).await.ok().flatten()?;
+    Some((song, position_ticks))
 }
 
 // ── Favorites ───────────────────────────────────────────────────────────────

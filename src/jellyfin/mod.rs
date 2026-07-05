@@ -9,6 +9,7 @@ pub mod similar;
 use crate::config::JellyfinConfig;
 use crate::db::Db;
 use crate::scanner::ScanProgress;
+use crate::scrobble::ListenBrainzClient;
 use crate::typesense::TypesenseClient;
 use crate::video_scanner::VideoScanProgress;
 use actix_cors::Cors;
@@ -38,6 +39,9 @@ pub struct JellyfinState {
     /// Optional Typesense search backend for `?searchTerm=`. Falls back to
     /// FTS5 on error; `None` keeps the FTS5 path.
     pub typesense: Option<Arc<TypesenseClient>>,
+    /// Optional ListenBrainz scrobble target. `None` → session handlers
+    /// stay pass-through 204s.
+    pub scrobble: Option<Arc<ListenBrainzClient>>,
 }
 
 pub async fn start(
@@ -54,6 +58,7 @@ pub async fn start(
     music_scan_progress: Arc<ScanProgress>,
     video_scan_progress: Arc<VideoScanProgress>,
     typesense: Option<Arc<TypesenseClient>>,
+    scrobble: Option<Arc<ListenBrainzClient>>,
 ) -> anyhow::Result<()> {
     let server_id = auth::ensure_server_id(&pool).await?;
     let user_id = mapping::user_guid(&username);
@@ -86,6 +91,7 @@ pub async fn start(
         video_scan_progress,
         similar: similar_providers,
         typesense,
+        scrobble,
     });
 
     tracing::info!(
@@ -721,6 +727,7 @@ mod tests {
             video_scan_progress: Arc::new(VideoScanProgress::default()),
             similar: Arc::new(similar::SimilarProviders::new(None, None)),
             typesense: None,
+            scrobble: None,
         }
     }
 
@@ -2871,5 +2878,59 @@ mod tests {
         assert!(body.is_array());
         assert_eq!(body.as_array().unwrap().len(), 1);
         assert_eq!(body[0]["Type"], "MusicAlbum");
+    }
+
+    /// Sessions/Playing[/Progress|/Stopped] must remain 204s even when the
+    /// [listenbrainz] block is absent. This proves the scrobble path is
+    /// truly opt-in — no network traffic, no errors.
+    #[actix_web::test]
+    async fn session_playback_stays_204_without_listenbrainz_plugin() {
+        let dir = tempdir();
+        let state = fixture_state(&dir, &dir, false).await;
+        assert!(state.scrobble.is_none(), "fixture must not enable scrobble");
+        let app = test::init_service(
+            App::new()
+                .app_data(web::Data::new(state))
+                .configure(configure_routes),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/Users/AuthenticateByName")
+            .insert_header((
+                "X-Emby-Authorization",
+                r#"MediaBrowser Client="t", Device="d", DeviceId="i", Version="v""#,
+            ))
+            .set_json(serde_json::json!({"Username":"alice","Pw":"secret"}))
+            .to_request();
+        let auth_body: Value = test::call_and_read_body_json(&app, req).await;
+        let token = auth_body["AccessToken"].as_str().unwrap().to_string();
+
+        // Discover the song GUID.
+        let req = test::TestRequest::get()
+            .uri("/Items?IncludeItemTypes=Audio")
+            .insert_header(("X-Emby-Token", token.clone()))
+            .to_request();
+        let songs: Value = test::call_and_read_body_json(&app, req).await;
+        let song_id = songs["Items"][0]["Id"].as_str().unwrap().to_string();
+
+        for path in [
+            "/Sessions/Playing",
+            "/Sessions/Playing/Progress",
+            "/Sessions/Playing/Stopped",
+        ] {
+            let req = test::TestRequest::post()
+                .uri(path)
+                .insert_header(("X-Emby-Token", token.clone()))
+                .set_json(serde_json::json!({
+                    "ItemId": song_id.clone(),
+                    "PositionTicks": 100_000_000_i64,
+                }))
+                .to_request();
+            assert_eq!(
+                test::call_service(&app, req).await.status(),
+                StatusCode::NO_CONTENT,
+                "{path}"
+            );
+        }
     }
 }

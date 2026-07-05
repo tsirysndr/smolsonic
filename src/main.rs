@@ -6,6 +6,7 @@ mod mdns;
 mod models;
 mod s3;
 mod scanner;
+mod scrobble;
 mod server;
 mod typesense;
 mod video_scanner;
@@ -84,6 +85,21 @@ async fn main() -> Result<()> {
         } else {
             None
         };
+
+    // Optional ListenBrainz scrobble client. Same opt-in shape as the other
+    // plugins — `None` when `[listenbrainz]` is absent from the config.
+    let scrobble: Option<Arc<scrobble::ListenBrainzClient>> = cfg
+        .listenbrainz
+        .as_ref()
+        .map(|lb| Arc::new(scrobble::ListenBrainzClient::new(lb)));
+    tracing::info!(
+        "listenbrainz scrobble: {}",
+        if scrobble.is_some() {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
 
     if !args.no_scan {
         let pool_c = pool.clone();
@@ -227,6 +243,7 @@ async fn main() -> Result<()> {
                 let music_progress = scan_progress.clone();
                 let video_progress = video_scan_progress.clone();
                 let ts_c = typesense.clone();
+                let lb_c = scrobble.clone();
                 actix_web::rt::spawn(async move {
                     if let Err(e) = jellyfin::start(
                         jf_cfg_c,
@@ -242,6 +259,7 @@ async fn main() -> Result<()> {
                         music_progress,
                         video_progress,
                         ts_c,
+                        lb_c,
                     )
                     .await
                     {
@@ -298,5 +316,5 @@ async fn main() -> Result<()> {
         None
     };
 
-    server::start(cfg, pool, scan_progress, typesense).await
+    server::start(cfg, pool, scan_progress, typesense, scrobble).await
 }
