@@ -37,11 +37,15 @@
         src = craneLib.cleanCargoSource ./.;
 
         # node_modules for the s3webui SPA. `bun install` needs the network,
-        # so dependency resolution lives in a fixed-output derivation. The
-        # hash pins the resolved tree across bun.lock.
+        # so dependency resolution lives in a fixed-output derivation.
         #
-        # Updating: change package.json/bun.lock, run `nix build`, copy the
-        # hash Nix reports on mismatch into `outputHash` below.
+        # The tree is NOT platform-independent: native optional deps (e.g.
+        # @tailwindcss/oxide-*) are installed per-OS/CPU, so each system
+        # needs its own hash.
+        #
+        # Updating: change package.json/bun.lock, set the current system's
+        # hash below to lib.fakeHash, run `nix build`, copy the hash Nix
+        # reports on mismatch back in. Repeat per platform.
         s3webuiNodeModules = pkgs.stdenv.mkDerivation {
           pname = "smolsonic-s3webui-node-modules";
           version = "0.8.1";
@@ -75,7 +79,12 @@
 
           outputHashMode = "recursive";
           outputHashAlgo = "sha256";
-          outputHash = "sha256-yKUGN1F8I1S6M5GgXeVA5y/u2gm8vYjyKxGLNO1nB90=";
+          outputHash = {
+            x86_64-linux = "sha256-yKUGN1F8I1S6M5GgXeVA5y/u2gm8vYjyKxGLNO1nB90=";
+            aarch64-linux = lib.fakeHash;
+            aarch64-darwin = "sha256-VuAM4wkTAL8kIE0KseAC79F4+qLbLzR4g3AWiQjwaT0=";
+            x86_64-darwin = lib.fakeHash;
+          }.${system};
         };
 
         # Build the React SPA. The resulting `dist/` is embedded into the
