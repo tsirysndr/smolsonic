@@ -47,6 +47,41 @@ pub struct Config {
     /// (position > half OR position > 4 min) qualifies as a scrobble.
     #[serde(default)]
     pub listenbrainz: Option<ListenBrainzConfig>,
+    /// Optional UPnP/DLNA media server. When present (and `enabled`), the
+    /// library is announced over SSDP and browsable from DLNA renderers and
+    /// control points (VLC, BubbleUPnP, smart TVs, Sonos, …). Streams are
+    /// served unauthenticated on the UPnP port — DLNA has no auth concept —
+    /// so only enable this on trusted networks.
+    #[serde(default)]
+    pub upnp: Option<UpnpConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpnpConfig {
+    #[serde(default = "default_upnp_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_upnp_host")]
+    pub host: String,
+    #[serde(default = "default_upnp_port")]
+    pub port: u16,
+    #[serde(default = "default_upnp_friendly_name")]
+    pub friendly_name: String,
+}
+
+fn default_upnp_enabled() -> bool {
+    true
+}
+
+fn default_upnp_host() -> String {
+    "0.0.0.0".to_string()
+}
+
+fn default_upnp_port() -> u16 {
+    8200
+}
+
+fn default_upnp_friendly_name() -> String {
+    "smolsonic".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]

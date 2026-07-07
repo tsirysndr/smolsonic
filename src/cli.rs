@@ -56,6 +56,7 @@ pub fn print_banner(
     music_dir: &std::path::Path,
     s3_endpoint: Option<(&str, u16)>,
     jellyfin_endpoint: Option<(&str, u16)>,
+    upnp_endpoint: Option<(&str, u16)>,
 ) {
     // Synthwave 24-bit colors — match neon_styles().
     let hot_pink = "\x1b[1;38;2;255;42;109m"; // #ff2a6d
@@ -78,6 +79,11 @@ pub fn print_banner(
     if let Some((jf_host, jf_port)) = jellyfin_endpoint {
         println!(
             "  {electric_cyan}jellyfin{reset} {dim}→{reset} {hot_pink}http://{jf_host}:{jf_port}{reset}"
+        );
+    }
+    if let Some((upnp_host, upnp_port)) = upnp_endpoint {
+        println!(
+            "  {electric_cyan}upnp    {reset} {dim}→{reset} {electric_purple}http://{upnp_host}:{upnp_port}{reset}"
         );
     }
     println!(

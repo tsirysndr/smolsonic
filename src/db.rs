@@ -193,6 +193,14 @@ async fn migrate(pool: &Db) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_jf_guids_native ON jf_guids(kind, native_id);
 
+        -- ── UPnP/DLNA media server ──────────────────────────────────────────
+        -- Holds the device UUID so the UDN stays stable across restarts
+        -- (control points key their server list on it).
+        CREATE TABLE IF NOT EXISTS upnp_meta (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
         -- ── FTS5 full-text search ────────────────────────────────────────────
         CREATE VIRTUAL TABLE IF NOT EXISTS songs_fts USING fts5(
             id UNINDEXED, title, artist, album, genre,

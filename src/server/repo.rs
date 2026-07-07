@@ -374,6 +374,24 @@ pub async fn albums_by_artist(pool: &Db, artist_id: &str) -> Result<Vec<Album>> 
     Ok(rows)
 }
 
+pub async fn all_albums(pool: &Db) -> Result<Vec<Album>> {
+    let rows = sqlx::query_as::<_, Album>(
+        "SELECT id, title, artist, artist_id, year, cover_art FROM albums
+         ORDER BY title COLLATE NOCASE",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn song_counts_by_album(pool: &Db) -> Result<std::collections::HashMap<String, i64>> {
+    let rows: Vec<(String, i64)> =
+        sqlx::query_as("SELECT album_id, COUNT(*) FROM songs GROUP BY album_id")
+            .fetch_all(pool)
+            .await?;
+    Ok(rows.into_iter().collect())
+}
+
 pub async fn find_album(pool: &Db, id: &str) -> Result<Option<Album>> {
     let row = sqlx::query_as::<_, Album>(
         "SELECT id, title, artist, artist_id, year, cover_art FROM albums WHERE id = ?1",

@@ -27,6 +27,7 @@ browse and stream your library.
   - [S3-compatible API](#s3-compatible-api)
   - [S3 admin web UI](#s3-admin-web-ui)
   - [Jellyfin-compatible API](#jellyfin-compatible-api)
+  - [UPnP / DLNA media server](#upnp--dlna-media-server)
   - [Zeroconf / mDNS](#zeroconf--mdns)
   - [Search backends](#search-backends)
   - [ListenBrainz scrobbling](#listenbrainz-scrobbling)
@@ -67,6 +68,9 @@ browse and stream your library.
 - **Optional ListenBrainz scrobbling** — Jellyfin session events and Subsonic
   `/rest/scrobble` submit `playing_now` + `single` listens following the
   Last.fm submission rules.
+- **Optional UPnP/DLNA media server** — announces the library over SSDP so
+  DLNA renderers and control points (VLC, BubbleUPnP, Kodi, smart TVs, …)
+  can browse Artists / Albums / Playlists and stream directly.
 - **Optional Typesense search backend** with automatic FTS5 fallback.
 - **Optional video library** scanned alongside music — direct-play streaming,
   ffmpeg-based thumbnail generation when no sibling poster exists.
@@ -210,6 +214,13 @@ video_dir          = "/path/to/your/videos"
 scan_interval_secs = 300        # optional, default 300 (0 disables)
 library_name       = "Movies"   # optional, shown to Jellyfin clients
 
+# Optional UPnP/DLNA media server. Omit the block to disable.
+[upnp]
+enabled       = true         # optional, default true when the section exists
+host          = "0.0.0.0"    # optional
+port          = 8200         # optional
+friendly_name = "smolsonic"  # optional — name renderers display
+
 # Optional Zeroconf/mDNS service broadcast. Enabled by default.
 [mdns]
 enabled       = true
@@ -228,6 +239,7 @@ instance_name = "smolsonic"
 | `[s3]`           | Optional S3 server section (see below).                     |
 | `[jellyfin]`     | Optional Jellyfin-compatible API on its own port.           |
 | `[video]`        | Optional video library, surfaced through the Jellyfin API.  |
+| `[upnp]`         | Optional UPnP/DLNA media server (see below).                |
 | `[mdns]`         | Optional Zeroconf/mDNS broadcast (see below).               |
 | `[typesense]`    | Optional Typesense search backend (falls back to FTS5).     |
 | `[lastfm]`       | Optional Last.fm plugin — similar artists + bios + tags.    |
@@ -412,6 +424,50 @@ Posters resolve in this order:
    frame at ~10% into the video and caches it under `covers/{video_id}.jpg`.
 
 Playback is direct-play only — clients must support the container natively.
+
+### UPnP / DLNA media server
+
+Add a `[upnp]` block and smolsonic shows up as a **UPnP AV MediaServer:1**
+(DMS-1.50) on your LAN — no client configuration at all. Works with DLNA
+renderers and control points like VLC (Local Network → Universal Plug'n'Play),
+BubbleUPnP, Kodi, mconnect, and most smart TVs and network speakers.
+
+```toml
+[upnp]
+enabled       = true         # optional, default true when the section exists
+host          = "0.0.0.0"    # optional
+port          = 8200         # optional
+friendly_name = "smolsonic"  # optional — name renderers display
+```
+
+| Key             | Purpose                                                        |
+| --------------- | -------------------------------------------------------------- |
+| `enabled`       | Toggle the UPnP server. Default `true` when the section exists. |
+| `host`          | Interface to bind for the UPnP HTTP endpoints. Default `0.0.0.0`. |
+| `port`          | TCP port for description/control/streaming. Default `8200`.    |
+| `friendly_name` | Device name shown by renderers. Default `smolsonic`.           |
+
+How it works:
+
+- **SSDP discovery** — listens for `M-SEARCH` probes on UDP 1900 (bound with
+  `SO_REUSEADDR`/`SO_REUSEPORT`, so it coexists with other UPnP daemons on
+  the same host) and multicasts `NOTIFY ssdp:alive` to `239.255.255.250:1900`
+  on startup and every 10 minutes, per interface.
+- **ContentDirectory** — SOAP `Browse` over the existing SQLite library:
+  `root → Artists / Albums / Playlists`, with track metadata (title, artist,
+  album, track number, duration, bitrate) and album art URIs in the DIDL-Lite
+  results. Paging via `StartingIndex`/`RequestedCount` is honoured.
+- **Streaming** — direct-play from the same port, Range-aware, with the
+  `contentFeatures.dlna.org` / `transferMode.dlna.org` headers renderers
+  expect. Stream URLs end in the real file extension (`…/stream/so-….flac`)
+  because some renderers refuse URLs without one.
+- The device UUID is persisted in SQLite (`upnp_meta`), so control points
+  that key their server list on the UDN keep recognizing the server across
+  restarts.
+
+> **Note:** DLNA has no authentication concept, so streams on the UPnP port
+> are unauthenticated by design. Only enable `[upnp]` on trusted networks,
+> or bind `host` to a specific interface.
 
 ### Zeroconf / mDNS
 
@@ -641,6 +697,10 @@ src/
     mapping.rs       Native ID ↔ Jellyfin GUID translation
     handlers.rs      All Jellyfin endpoint handlers
     discovery.rs     UDP 7359 client-discovery listener
+  upnp/
+    mod.rs           actix App for description/control/streaming + device XML
+    content_directory.rs  SOAP ContentDirectory Browse over the library
+    ssdp.rs          SSDP M-SEARCH responder + periodic ssdp:alive NOTIFY
 s3webui/             React + Vite admin SPA (built and embedded at release)
 ```
 

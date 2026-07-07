@@ -29,6 +29,17 @@ scan_interval_secs = 300
 # access_key = "smolsonic"
 # secret_key = "changeme-please"
 
+# Optional UPnP/DLNA media server. Announces the library over SSDP so DLNA
+# renderers and control points (VLC, BubbleUPnP, smart TVs, Sonos, Kodi, …)
+# can browse Artists / Albums / Playlists and stream directly. DLNA has no
+# authentication, so streams on this port are unauthenticated — only enable
+# on trusted networks. Defaults shown.
+# [upnp]
+# enabled = true
+# host = "0.0.0.0"
+# port = 8200
+# friendly_name = "smolsonic"
+
 # Optional Last.fm plugin. Powers the "Similar" rails on album/artist detail
 # pages via artist.getSimilar. Register a free API key at last.fm/api.
 # Omit the block entirely to disable — /…/Similar returns empty in that case.

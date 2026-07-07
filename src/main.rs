@@ -9,6 +9,7 @@ mod scanner;
 mod scrobble;
 mod server;
 mod typesense;
+mod upnp;
 mod video_scanner;
 mod watcher;
 
@@ -36,12 +37,18 @@ async fn main() -> Result<()> {
         .filter(|s| s.enabled)
         .map(|s| (s.host.as_str(), s.port));
     let jellyfin_endpoint = cfg.jellyfin.as_ref().map(|j| (j.host.as_str(), j.port));
+    let upnp_endpoint = cfg
+        .upnp
+        .as_ref()
+        .filter(|u| u.enabled)
+        .map(|u| (u.host.as_str(), u.port));
     cli::print_banner(
         &cfg.host,
         cfg.port,
         &cfg.music_dir,
         s3_endpoint,
         jellyfin_endpoint,
+        upnp_endpoint,
     );
 
     let pool = db::init(&cfg.database_path).await?;
@@ -288,6 +295,34 @@ async fn main() -> Result<()> {
     } else {
         None
     };
+
+    // UPnP/DLNA media server — enabled only when [upnp] block is present.
+    if let Some(upnp_cfg) = cfg.upnp.clone().filter(|u| u.enabled) {
+        match upnp::ensure_device_uuid(&pool).await {
+            Ok(uuid) => {
+                let pool_c = pool.clone();
+                let covers_dir = cfg.covers_dir.clone();
+                let subsonic_port = cfg.port;
+                let http_port = upnp_cfg.port;
+                let uuid_c = uuid.clone();
+                actix_web::rt::spawn(async move {
+                    if let Err(e) =
+                        upnp::start(upnp_cfg, pool_c, covers_dir, uuid_c, subsonic_port).await
+                    {
+                        tracing::error!("upnp server stopped: {e}");
+                    }
+                });
+                tokio::spawn(async move {
+                    if let Err(e) = upnp::ssdp::run(uuid, http_port).await {
+                        tracing::error!("upnp ssdp stopped: {e}");
+                    }
+                });
+            }
+            Err(e) => {
+                tracing::error!("upnp: failed to initialize device uuid: {e}");
+            }
+        }
+    }
 
     let _mdns_handle = if cfg.mdns.enabled {
         let s3_endpoint = cfg
