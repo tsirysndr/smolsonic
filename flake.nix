@@ -48,7 +48,7 @@
         # reports on mismatch back in. Repeat per platform.
         s3webuiNodeModules = pkgs.stdenv.mkDerivation {
           pname = "smolsonic-s3webui-node-modules";
-          version = "0.8.1";
+          version = "0.9.0";
 
           src = lib.fileset.toSource {
             root = ./s3webui;
@@ -91,7 +91,7 @@
         # smolsonic binary at compile time via rust-embed.
         s3webui = pkgs.stdenv.mkDerivation {
           pname = "smolsonic-s3webui";
-          version = "0.8.1";
+          version = "0.9.0";
 
           src = ./s3webui;
 
@@ -124,7 +124,7 @@
           inherit src;
 
           pname = "smolsonic";
-          version = "0.8.1";
+          version = "0.9.0";
 
           nativeBuildInputs = [
             pkgs.pkg-config

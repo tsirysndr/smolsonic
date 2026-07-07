@@ -1,5 +1,5 @@
 Package: smolsonic
-Version: 0.8.1
+Version: 0.9.0
 Section: sound
 Priority: optional
 Architecture: amd64
