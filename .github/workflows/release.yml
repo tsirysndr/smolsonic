@@ -213,11 +213,11 @@ jobs:
             os_version: "7.9"
             arch: x86-64
             install_rust: sudo pkg_add rust
-          - label: openbsd-aarch64
-            os: openbsd
-            os_version: "7.9"
-            arch: arm64
-            install_rust: sudo pkg_add rust
+          # - label: openbsd-aarch64
+          #   os: openbsd
+          #   os_version: "7.9"
+          #   arch: arm64
+          #   install_rust: sudo pkg_add rust
 
     steps:
       - name: Checkout
