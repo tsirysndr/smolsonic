@@ -183,9 +183,7 @@ jobs:
 
   build-bsd:
     name: ${{ matrix.label }}
-    # arm64 VMs must run on the native arm64 runner; QEMU emulation on
-    # x86_64 hosts is an order of magnitude slower.
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -194,37 +192,31 @@ jobs:
             os: freebsd
             os_version: "14.3"
             arch: x86-64
-            runner: ubuntu-latest
             install_rust: sudo env ASSUME_ALWAYS_YES=YES pkg install -y rust
           - label: freebsd-aarch64
             os: freebsd
             os_version: "14.3"
             arch: arm64
-            runner: ubuntu-24.04-arm
             install_rust: sudo env ASSUME_ALWAYS_YES=YES pkg install -y rust
           - label: netbsd-amd64
             os: netbsd
             os_version: "10.1"
             arch: x86-64
-            runner: ubuntu-latest
             install_rust: sudo pkgin -y update && sudo pkgin -y install rust
           - label: netbsd-aarch64
             os: netbsd
             os_version: "10.1"
             arch: arm64
-            runner: ubuntu-24.04-arm
             install_rust: sudo pkgin -y update && sudo pkgin -y install rust
           - label: openbsd-amd64
             os: openbsd
             os_version: "7.9"
             arch: x86-64
-            runner: ubuntu-latest
             install_rust: sudo pkg_add rust
           - label: openbsd-aarch64
             os: openbsd
             os_version: "7.9"
             arch: arm64
-            runner: ubuntu-24.04-arm
             install_rust: sudo pkg_add rust
 
     steps:
