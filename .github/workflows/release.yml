@@ -188,36 +188,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # aarch64 BSD builds are emulated and too slow to block the
+          # release; they run in release-bsd-aarch64.yml and attach their
+          # artifacts to the release once it exists.
           - label: freebsd-amd64
             os: freebsd
             os_version: "14.3"
             arch: x86-64
-            install_rust: sudo env ASSUME_ALWAYS_YES=YES pkg install -y rust
-          - label: freebsd-aarch64
-            os: freebsd
-            os_version: "14.3"
-            arch: arm64
             install_rust: sudo env ASSUME_ALWAYS_YES=YES pkg install -y rust
           - label: netbsd-amd64
             os: netbsd
             os_version: "10.1"
             arch: x86-64
             install_rust: sudo pkgin -y update && sudo pkgin -y install rust
-          - label: netbsd-aarch64
-            os: netbsd
-            os_version: "10.1"
-            arch: arm64
-            install_rust: sudo pkgin -y update && sudo pkgin -y install rust
           - label: openbsd-amd64
             os: openbsd
             os_version: "7.9"
             arch: x86-64
             install_rust: sudo pkg_add rust
-          # - label: openbsd-aarch64
-          #   os: openbsd
-          #   os_version: "7.9"
-          #   arch: arm64
-          #   install_rust: sudo pkg_add rust
 
     steps:
       - name: Checkout
