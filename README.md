@@ -1,4 +1,5 @@
 # smolsonic
+[![FlakeHub](https://img.shields.io/endpoint?url=https://flakehub.com/f/tsirysndr/smolsonic/badge)](https://flakehub.com/flake/tsirysndr/smolsonic)
 [![Release](https://github.com/tsirysndr/smolsonic/actions/workflows/release.yml/badge.svg)](https://github.com/tsirysndr/smolsonic/actions/workflows/release.yml)
 [![crates.io](https://img.shields.io/crates/v/smolsonic.svg)](https://crates.io/crates/smolsonic)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
