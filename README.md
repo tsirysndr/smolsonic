@@ -150,6 +150,9 @@ systemctl --user status smolsonic.service
 Nix flake:
 
 ```sh
+# Use Cache
+cachix use tsirysndr
+
 # Run without installing
 nix run github:tsirysndr/smolsonic -- --config smolsonic.toml
 
