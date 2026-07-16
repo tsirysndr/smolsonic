@@ -153,7 +153,10 @@ async fn send_alive(uuid: &str, http_port: u16) {
 fn notify_targets(uuid: &str) -> Vec<(String, String)> {
     let root = format!("uuid:{uuid}");
     vec![
-        ("upnp:rootdevice".to_string(), format!("{root}::upnp:rootdevice")),
+        (
+            "upnp:rootdevice".to_string(),
+            format!("{root}::upnp:rootdevice"),
+        ),
         (root.clone(), root.clone()),
         (DEVICE_TYPE.to_string(), format!("{root}::{DEVICE_TYPE}")),
         (
@@ -230,7 +233,8 @@ mod tests {
 
     #[test]
     fn header_value_is_case_insensitive() {
-        let msg = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nst: ssdp:all\r\nMX: 2\r\n\r\n";
+        let msg =
+            "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nst: ssdp:all\r\nMX: 2\r\n\r\n";
         assert_eq!(header_value(msg, "ST").as_deref(), Some("ssdp:all"));
         assert_eq!(header_value(msg, "MX").as_deref(), Some("2"));
         assert_eq!(header_value(msg, "Missing"), None);
