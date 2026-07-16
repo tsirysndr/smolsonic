@@ -1,5 +1,5 @@
 use crate::db::Db;
-use crate::models::{Album, Artist, Playlist, Song, Video};
+use crate::models::{Album, Artist, InternetRadioStation, Playlist, Song, Video};
 use crate::typesense::TypesenseClient;
 use anyhow::Result;
 
@@ -1274,6 +1274,81 @@ pub async fn delete_playlist(pool: &Db, id: &str) -> Result<()> {
         .execute(pool)
         .await?;
     sqlx::query("DELETE FROM playlist_songs WHERE playlist_id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+// ── Internet radio ────────────────────────────────────────────────────────────
+
+pub async fn all_internet_radio_stations(pool: &Db) -> Result<Vec<InternetRadioStation>> {
+    let rows = sqlx::query_as::<_, InternetRadioStation>(
+        "SELECT id, name, stream_url, homepage_url FROM internet_radio_stations
+         ORDER BY name COLLATE NOCASE",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn find_internet_radio_station(
+    pool: &Db,
+    id: &str,
+) -> Result<Option<InternetRadioStation>> {
+    let row = sqlx::query_as::<_, InternetRadioStation>(
+        "SELECT id, name, stream_url, homepage_url FROM internet_radio_stations WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn create_internet_radio_station(
+    pool: &Db,
+    id: &str,
+    name: &str,
+    stream_url: &str,
+    homepage_url: Option<&str>,
+    now: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO internet_radio_stations (id, name, stream_url, homepage_url, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+    )
+    .bind(id)
+    .bind(name)
+    .bind(stream_url)
+    .bind(homepage_url)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn update_internet_radio_station(
+    pool: &Db,
+    id: &str,
+    name: &str,
+    stream_url: &str,
+    homepage_url: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE internet_radio_stations
+         SET name = ?2, stream_url = ?3, homepage_url = ?4 WHERE id = ?1",
+    )
+    .bind(id)
+    .bind(name)
+    .bind(stream_url)
+    .bind(homepage_url)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_internet_radio_station(pool: &Db, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM internet_radio_stations WHERE id = ?1")
         .bind(id)
         .execute(pool)
         .await?;

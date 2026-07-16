@@ -636,6 +636,9 @@ envelope (`{"subsonic-response": …}`).
 
 **Starring** — `star`, `unstar`
 
+**Internet radio** — `getInternetRadioStations`, `createInternetRadioStation`,
+`updateInternetRadioStation`, `deleteInternetRadioStation`
+
 **Artist / album info** — `getArtistInfo`, `getArtistInfo2`, `getAlbumInfo`,
 `getAlbumInfo2`, `getSimilarSongs`, `getSimilarSongs2`, `getTopSongs`,
 `getLyrics`. Return minimal stub shapes on the Subsonic side; rich metadata

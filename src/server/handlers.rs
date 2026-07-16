@@ -70,6 +70,12 @@ Supported endpoints
     GET  /rest/star             ?id=so-…|albumId=al-…|artistId=ar-…
     GET  /rest/unstar           ?id=so-…|albumId=al-…|artistId=ar-…
 
+  Internet radio
+    GET  /rest/getInternetRadioStations
+    GET  /rest/createInternetRadioStation ?streamUrl=…&name=…&homepageUrl=…
+    GET  /rest/updateInternetRadioStation ?id=ir-…&streamUrl=…&name=…&homepageUrl=…
+    GET  /rest/deleteInternetRadioStation ?id=ir-…
+
   Artist / album info  (minimal stubs — no Last.fm lookup)
     GET  /rest/getArtistInfo    ?id=ar-…
     GET  /rest/getArtistInfo2   ?id=ar-…
@@ -1547,6 +1553,150 @@ pub async fn delete_playlist(
     };
     if let Err(e) = repo::delete_playlist(&state.pool, id).await {
         tracing::error!("deletePlaylist: {e}");
+        return response::error_json(0, "database error");
+    }
+    response::ok_json(json!({}))
+}
+
+// ── Internet radio ────────────────────────────────────────────────────────────
+
+fn radio_station_json(s: &crate::models::InternetRadioStation) -> Value {
+    let mut m = serde_json::Map::new();
+    m.insert("id".into(), json!(s.id));
+    m.insert("name".into(), json!(s.name));
+    m.insert("streamUrl".into(), json!(s.stream_url));
+    if let Some(h) = &s.homepage_url {
+        m.insert("homepageUrl".into(), json!(h));
+    }
+    Value::Object(m)
+}
+
+fn new_radio_id() -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let mut h = DefaultHasher::new();
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .hash(&mut h);
+    std::thread::current().id().hash(&mut h);
+    format!("ir-{:016x}", h.finish())
+}
+
+pub async fn get_internet_radio_stations(
+    state: web::Data<SubsonicState>,
+    query: web::Query<CommonParams>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(&state, &CommonLike::from_common(&q)) {
+        return r;
+    }
+    let stations = repo::all_internet_radio_stations(&state.pool)
+        .await
+        .unwrap_or_default();
+    let out: Vec<Value> = stations.iter().map(radio_station_json).collect();
+    response::ok_json(json!({
+        "internetRadioStations": { "internetRadioStation": out }
+    }))
+}
+
+pub async fn create_internet_radio_station(
+    state: web::Data<SubsonicState>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let qs = req.query_string();
+    if let Some(r) = auth_from_qs(&state, qs) {
+        return r;
+    }
+    let Some(stream_url) = query_value(qs, "streamUrl").filter(|s| !s.is_empty()) else {
+        return response::error_json(10, "Required parameter is missing: streamUrl");
+    };
+    let Some(name) = query_value(qs, "name").filter(|s| !s.is_empty()) else {
+        return response::error_json(10, "Required parameter is missing: name");
+    };
+    let homepage_url = query_value(qs, "homepageUrl").filter(|s| !s.is_empty());
+    let id = new_radio_id();
+    let now = now_iso8601();
+    if let Err(e) = repo::create_internet_radio_station(
+        &state.pool,
+        &id,
+        &name,
+        &stream_url,
+        homepage_url.as_deref(),
+        &now,
+    )
+    .await
+    {
+        tracing::error!("createInternetRadioStation: {e}");
+        return response::error_json(0, "database error");
+    }
+    response::ok_json(json!({}))
+}
+
+pub async fn update_internet_radio_station(
+    state: web::Data<SubsonicState>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let qs = req.query_string();
+    if let Some(r) = auth_from_qs(&state, qs) {
+        return r;
+    }
+    let Some(id) = query_value(qs, "id").filter(|s| !s.is_empty()) else {
+        return response::error_json(10, "Required parameter is missing: id");
+    };
+    let Some(stream_url) = query_value(qs, "streamUrl").filter(|s| !s.is_empty()) else {
+        return response::error_json(10, "Required parameter is missing: streamUrl");
+    };
+    let Some(name) = query_value(qs, "name").filter(|s| !s.is_empty()) else {
+        return response::error_json(10, "Required parameter is missing: name");
+    };
+    if repo::find_internet_radio_station(&state.pool, &id)
+        .await
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        return response::error_json(70, "Internet radio station not found");
+    }
+    let homepage_url = query_value(qs, "homepageUrl").filter(|s| !s.is_empty());
+    if let Err(e) = repo::update_internet_radio_station(
+        &state.pool,
+        &id,
+        &name,
+        &stream_url,
+        homepage_url.as_deref(),
+    )
+    .await
+    {
+        tracing::error!("updateInternetRadioStation: {e}");
+        return response::error_json(0, "database error");
+    }
+    response::ok_json(json!({}))
+}
+
+pub async fn delete_internet_radio_station(
+    state: web::Data<SubsonicState>,
+    query: web::Query<IdParam>,
+) -> HttpResponse {
+    let q = query.into_inner();
+    if let Some(r) = require_auth(&state, &CommonLike::from_id(&q)) {
+        return r;
+    }
+    let Some(id) = q.id.as_deref().filter(|s| !s.is_empty()) else {
+        return response::error_json(10, "Required parameter is missing: id");
+    };
+    if repo::find_internet_radio_station(&state.pool, id)
+        .await
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        return response::error_json(70, "Internet radio station not found");
+    }
+    if let Err(e) = repo::delete_internet_radio_station(&state.pool, id).await {
+        tracing::error!("deleteInternetRadioStation: {e}");
         return response::error_json(0, "database error");
     }
     response::ok_json(json!({}))

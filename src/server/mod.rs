@@ -305,6 +305,39 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             "/rest/deletePlaylist{_:(\\.view)?}",
             web::post().to(handlers::delete_playlist),
         )
+        // Internet radio
+        .route(
+            "/rest/getInternetRadioStations{_:(\\.view)?}",
+            web::get().to(handlers::get_internet_radio_stations),
+        )
+        .route(
+            "/rest/getInternetRadioStations{_:(\\.view)?}",
+            web::post().to(handlers::get_internet_radio_stations),
+        )
+        .route(
+            "/rest/createInternetRadioStation{_:(\\.view)?}",
+            web::get().to(handlers::create_internet_radio_station),
+        )
+        .route(
+            "/rest/createInternetRadioStation{_:(\\.view)?}",
+            web::post().to(handlers::create_internet_radio_station),
+        )
+        .route(
+            "/rest/updateInternetRadioStation{_:(\\.view)?}",
+            web::get().to(handlers::update_internet_radio_station),
+        )
+        .route(
+            "/rest/updateInternetRadioStation{_:(\\.view)?}",
+            web::post().to(handlers::update_internet_radio_station),
+        )
+        .route(
+            "/rest/deleteInternetRadioStation{_:(\\.view)?}",
+            web::get().to(handlers::delete_internet_radio_station),
+        )
+        .route(
+            "/rest/deleteInternetRadioStation{_:(\\.view)?}",
+            web::post().to(handlers::delete_internet_radio_station),
+        )
         // Artist / album info / similar / top / lyrics
         .route(
             "/rest/getArtistInfo{_:(\\.view)?}",
@@ -772,6 +805,128 @@ mod tests {
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[actix_web::test]
+    async fn internet_radio_station_crud_roundtrip() {
+        let dir = tempdir("radio");
+        let state = fixture_state(&dir, &dir).await;
+        let app = test::init_service(
+            App::new()
+                .app_data(build_app_state(state))
+                .configure(configure_routes),
+        )
+        .await;
+
+        // Empty to start.
+        let req = test::TestRequest::get()
+            .uri(&format!("/rest/getInternetRadioStations?{}", token_qs("s")))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(
+            body["subsonic-response"]["internetRadioStations"]["internetRadioStation"]
+                .as_array()
+                .map(|a| a.len()),
+            Some(0)
+        );
+
+        // Create one.
+        let req = test::TestRequest::get()
+            .uri(&format!(
+                "/rest/createInternetRadioStation?streamUrl=http://example.com/stream&name=Tronic&homepageUrl=http://example.com&{}",
+                token_qs("s")
+            ))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["subsonic-response"]["status"], "ok");
+
+        // It shows up with all fields.
+        let req = test::TestRequest::get()
+            .uri(&format!("/rest/getInternetRadioStations?{}", token_qs("s")))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        let stations = body["subsonic-response"]["internetRadioStations"]["internetRadioStation"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(stations.len(), 1);
+        let station = &stations[0];
+        assert_eq!(station["name"], "Tronic");
+        assert_eq!(station["streamUrl"], "http://example.com/stream");
+        assert_eq!(station["homepageUrl"], "http://example.com");
+        let id = station["id"].as_str().unwrap().to_string();
+
+        // Update it.
+        let req = test::TestRequest::get()
+            .uri(&format!(
+                "/rest/updateInternetRadioStation?id={id}&streamUrl=http://example.com/hd&name=Tronic+HD&{}",
+                token_qs("s")
+            ))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["subsonic-response"]["status"], "ok");
+
+        let req = test::TestRequest::get()
+            .uri(&format!("/rest/getInternetRadioStations?{}", token_qs("s")))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        let station =
+            &body["subsonic-response"]["internetRadioStations"]["internetRadioStation"][0];
+        assert_eq!(station["name"], "Tronic HD");
+        assert_eq!(station["streamUrl"], "http://example.com/hd");
+        // homepageUrl cleared on update (omitted, so null-stripped away).
+        assert!(station["homepageUrl"].is_null());
+
+        // Updating a missing id → error 70.
+        let req = test::TestRequest::get()
+            .uri(&format!(
+                "/rest/updateInternetRadioStation?id=ir-nope&streamUrl=x&name=y&{}",
+                token_qs("s")
+            ))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["subsonic-response"]["error"]["code"], 70);
+
+        // createInternetRadioStation without streamUrl → error 10.
+        let req = test::TestRequest::get()
+            .uri(&format!(
+                "/rest/createInternetRadioStation?name=NoUrl&{}",
+                token_qs("s")
+            ))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["subsonic-response"]["error"]["code"], 10);
+
+        // Delete it.
+        let req = test::TestRequest::get()
+            .uri(&format!(
+                "/rest/deleteInternetRadioStation?id={id}&{}",
+                token_qs("s")
+            ))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["subsonic-response"]["status"], "ok");
+
+        let req = test::TestRequest::get()
+            .uri(&format!("/rest/getInternetRadioStations?{}", token_qs("s")))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(
+            body["subsonic-response"]["internetRadioStations"]["internetRadioStation"]
+                .as_array()
+                .map(|a| a.len()),
+            Some(0)
+        );
+
+        // Deleting a missing id → error 70.
+        let req = test::TestRequest::get()
+            .uri(&format!(
+                "/rest/deleteInternetRadioStation?id={id}&{}",
+                token_qs("s")
+            ))
+            .to_request();
+        let body: Value = test::call_and_read_body_json(&app, req).await;
+        assert_eq!(body["subsonic-response"]["error"]["code"], 70);
     }
 
     #[actix_web::test]
