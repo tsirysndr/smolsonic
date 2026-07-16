@@ -93,7 +93,7 @@ Pin a version or change the install directory with env vars:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/tsirysndr/smolsonic/main/install.sh \
-  | SMOLSONIC_VERSION=v0.9.0 SMOLSONIC_INSTALL=$HOME/.local/bin sh
+  | SMOLSONIC_VERSION=v0.10.0 SMOLSONIC_INSTALL=$HOME/.local/bin sh
 ```
 
 Homebrew (macOS / Linux):
@@ -112,8 +112,8 @@ sudo apt-get update
 sudo apt-get install smolsonic
 
 # Or download a .deb directly from the release page
-curl -fsSLO https://github.com/tsirysndr/smolsonic/releases/latest/download/smolsonic_0.9.0_amd64.deb
-sudo dpkg -i smolsonic_0.9.0_amd64.deb
+curl -fsSLO https://github.com/tsirysndr/smolsonic/releases/latest/download/smolsonic_0.10.0_amd64.deb
+sudo dpkg -i smolsonic_0.10.0_amd64.deb
 ```
 
 Fedora / RHEL (`.rpm` for `x86_64`):
@@ -130,8 +130,8 @@ EOF
 sudo dnf install smolsonic
 
 # Or download an .rpm directly from the release page
-curl -fsSLO https://github.com/tsirysndr/smolsonic/releases/latest/download/smolsonic-0.9.0-1.x86_64.rpm
-sudo rpm -i smolsonic-0.9.0-1.x86_64.rpm
+curl -fsSLO https://github.com/tsirysndr/smolsonic/releases/latest/download/smolsonic-0.10.0-1.x86_64.rpm
+sudo rpm -i smolsonic-0.10.0-1.x86_64.rpm
 ```
 
 The `.deb` / `.rpm` packages drop the binary at `/usr/local/bin/smolsonic`,
@@ -573,7 +573,7 @@ api_key = "your-lastfm-api-key"
 # from /ws/2/artist?inc=artist-rels, plus cover art from the Cover Art
 # Archive. MusicBrainz requires a descriptive user agent per their TOS.
 [musicbrainz]
-user_agent = "smolsonic/0.9.0 ( you@example.com )"
+user_agent = "smolsonic/0.10.0 ( you@example.com )"
 ```
 
 What each enables:
@@ -635,6 +635,9 @@ envelope (`{"subsonic-response": …}`).
 `updatePlaylist`, `deletePlaylist`
 
 **Starring** — `star`, `unstar`
+
+**Internet radio** — `getInternetRadioStations`, `createInternetRadioStation`,
+`updateInternetRadioStation`, `deleteInternetRadioStation`
 
 **Artist / album info** — `getArtistInfo`, `getArtistInfo2`, `getAlbumInfo`,
 `getAlbumInfo2`, `getSimilarSongs`, `getSimilarSongs2`, `getTopSongs`,

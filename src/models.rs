@@ -28,6 +28,14 @@ pub struct Playlist {
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
+pub struct InternetRadioStation {
+    pub id: String,
+    pub name: String,
+    pub stream_url: String,
+    pub homepage_url: Option<String>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
 pub struct Video {
     pub id: String,
     pub path: String,

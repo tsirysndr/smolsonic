@@ -152,6 +152,17 @@ async fn migrate(pool: &Db) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_playlist_songs_pl ON playlist_songs(playlist_id);
 
+        -- ── Internet radio ──────────────────────────────────────────────────
+        -- User-managed list of external stream URLs surfaced through the
+        -- Subsonic getInternetRadioStations family. `homepage_url` is optional.
+        CREATE TABLE IF NOT EXISTS internet_radio_stations (
+            id           TEXT PRIMARY KEY,
+            name         TEXT NOT NULL,
+            stream_url   TEXT NOT NULL,
+            homepage_url TEXT,
+            created_at   TEXT NOT NULL
+        );
+
         -- ── Videos ──────────────────────────────────────────────────────────
         CREATE TABLE IF NOT EXISTS videos (
             id            TEXT PRIMARY KEY,
