@@ -96,6 +96,20 @@ curl -fsSL https://raw.githubusercontent.com/tsirysndr/smolsonic/main/install.sh
   | SMOLSONIC_VERSION=v0.10.0 SMOLSONIC_INSTALL=$HOME/.local/bin sh
 ```
 
+npm (macOS / Linux / FreeBSD / NetBSD / OpenBSD, x64 / arm64):
+
+```sh
+# Run without installing
+npx smolsonic --config smolsonic.toml
+
+# Or install globally
+npm install -g smolsonic
+```
+
+The npm package downloads the prebuilt binary matching your platform from the
+GitHub release and verifies its SHA-256 checksum on install. OpenBSD is x64
+only; every other listed OS ships both x64 and arm64.
+
 Homebrew (macOS / Linux):
 
 ```sh

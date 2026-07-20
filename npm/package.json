@@ -1,0 +1,52 @@
+{
+  "name": "smolsonic",
+  "version": "0.10.0",
+  "description": "A tiny, self-contained Subsonic- and Jellyfin-compatible music + video server written in Rust.",
+  "keywords": [
+    "subsonic",
+    "jellyfin",
+    "music-server",
+    "media-server",
+    "self-hosted",
+    "streaming",
+    "cli"
+  ],
+  "homepage": "https://github.com/tsirysndr/smolsonic#readme",
+  "bugs": {
+    "url": "https://github.com/tsirysndr/smolsonic/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tsirysndr/smolsonic.git"
+  },
+  "license": "MIT",
+  "author": "Tsiry Sandratraina",
+  "bin": {
+    "smolsonic": "bin/cli.js"
+  },
+  "files": [
+    "bin/cli.js",
+    "lib/platform.js",
+    "lib/download.js",
+    "scripts/postinstall.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "freebsd",
+    "netbsd",
+    "openbsd"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}

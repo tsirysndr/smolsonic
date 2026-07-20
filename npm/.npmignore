@@ -1,0 +1,3 @@
+# Never publish a downloaded native binary — it's fetched per-platform at
+# install time by scripts/postinstall.js.
+bin/smolsonic-bin

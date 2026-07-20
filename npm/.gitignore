@@ -1,0 +1,4 @@
+# Native binary downloaded at install time; never commit it.
+bin/smolsonic-bin
+node_modules/
+*.tgz
