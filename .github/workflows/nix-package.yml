@@ -19,7 +19,6 @@ on:
           - x86_64-linux
           - aarch64-linux
           - aarch64-darwin
-          - x86_64-darwin
 
 jobs:
   build:
@@ -28,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.systems == 'linux' && '[{"system":"x86_64-linux","os":"ubuntu-latest"},{"system":"aarch64-linux","os":"ubuntu-24.04-arm"}]' || inputs.systems == 'macos' && '[{"system":"aarch64-darwin","os":"macos-latest"},{"system":"x86_64-darwin","os":"macos-15-intel"}]' || inputs.systems == 'x86_64-linux' && '[{"system":"x86_64-linux","os":"ubuntu-latest"}]' || inputs.systems == 'aarch64-linux' && '[{"system":"aarch64-linux","os":"ubuntu-24.04-arm"}]' || inputs.systems == 'aarch64-darwin' && '[{"system":"aarch64-darwin","os":"macos-latest"}]' || inputs.systems == 'x86_64-darwin' && '[{"system":"x86_64-darwin","os":"macos-15-intel"}]' || '[{"system":"x86_64-linux","os":"ubuntu-latest"},{"system":"aarch64-linux","os":"ubuntu-24.04-arm"},{"system":"aarch64-darwin","os":"macos-latest"},{"system":"x86_64-darwin","os":"macos-15-intel"}]') }}
+        include: ${{ fromJSON(inputs.systems == 'linux' && '[{"system":"x86_64-linux","os":"ubuntu-latest"},{"system":"aarch64-linux","os":"ubuntu-24.04-arm"}]' || inputs.systems == 'macos' && '[{"system":"aarch64-darwin","os":"macos-latest"}]' || inputs.systems == 'x86_64-linux' && '[{"system":"x86_64-linux","os":"ubuntu-latest"}]' || inputs.systems == 'aarch64-linux' && '[{"system":"aarch64-linux","os":"ubuntu-24.04-arm"}]' || inputs.systems == 'aarch64-darwin' && '[{"system":"aarch64-darwin","os":"macos-latest"}]' || '[{"system":"x86_64-linux","os":"ubuntu-latest"},{"system":"aarch64-linux","os":"ubuntu-24.04-arm"},{"system":"aarch64-darwin","os":"macos-latest"}]') }}
 
     env:
       NIX_PATH: nixpkgs=channel:nixos-unstable
