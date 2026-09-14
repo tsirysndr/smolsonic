@@ -47,9 +47,9 @@ let
     outputHashAlgo = "sha256";
     outputHash =
       {
-        x86_64-linux = lib.fakeHash;
+        x86_64-linux = "sha256-yKUGN1F8I1S6M5GgXeVA5y/u2gm8vYjyKxGLNO1nB90=";
         aarch64-linux = lib.fakeHash;
-        aarch64-darwin = lib.fakeHash;
+        aarch64-darwin = "sha256-VuAM4wkTAL8kIE0KseAC79F4+qLbLzR4g3AWiQjwaT0=";
         x86_64-darwin = lib.fakeHash;
       }
       .${stdenv.hostPlatform.system}
