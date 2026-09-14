@@ -1,0 +1,46 @@
+name: Nix package
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or SHA to build from"
+        required: false
+        type: string
+      systems:
+        description: "Which systems to build on"
+        required: false
+        default: both
+        type: choice
+        options:
+          - both
+          - linux
+          - macos
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ (inputs.systems == 'linux' && fromJSON('["ubuntu-latest"]')) || (inputs.systems == 'macos' && fromJSON('["macos-latest"]')) || fromJSON('["ubuntu-latest", "macos-latest"]') }}
+
+    env:
+      NIX_PATH: nixpkgs=channel:nixos-unstable
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Setup Cachix
+        uses: cachix/cachix-action@v17
+        with:
+          name: tsirysndr
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+
+      - name: Build nix/package.nix
+        run: nix-build -E 'with import <nixpkgs> { }; callPackage ./nix/package.nix { }' --no-out-link
