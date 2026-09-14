@@ -93,7 +93,7 @@ rustPlatform.buildRustPackage {
   pname = "smolsonic";
   inherit version src;
 
-  cargoHash = lib.fakeHash;
+  cargoHash = "sha256-dgM0VpSnCiIPOx/JZ+SrjRgnYxQ5hhObsBU5nn6wZ+0=";
 
   preBuild = ''
     cp -r ${s3webui} s3webui/dist
