@@ -10,21 +10,25 @@ on:
       systems:
         description: "Which systems to build on"
         required: false
-        default: both
+        default: all
         type: choice
         options:
-          - both
+          - all
           - linux
           - macos
+          - x86_64-linux
+          - aarch64-linux
+          - aarch64-darwin
+          - x86_64-darwin
 
 jobs:
   build:
-    name: ${{ matrix.os }}
+    name: ${{ matrix.system }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ (inputs.systems == 'linux' && fromJSON('["ubuntu-latest"]')) || (inputs.systems == 'macos' && fromJSON('["macos-latest"]')) || fromJSON('["ubuntu-latest", "macos-latest"]') }}
+        include: ${{ fromJSON(inputs.systems == 'linux' && '[{"system":"x86_64-linux","os":"ubuntu-latest"},{"system":"aarch64-linux","os":"ubuntu-24.04-arm"}]' || inputs.systems == 'macos' && '[{"system":"aarch64-darwin","os":"macos-latest"},{"system":"x86_64-darwin","os":"macos-15-intel"}]' || inputs.systems == 'x86_64-linux' && '[{"system":"x86_64-linux","os":"ubuntu-latest"}]' || inputs.systems == 'aarch64-linux' && '[{"system":"aarch64-linux","os":"ubuntu-24.04-arm"}]' || inputs.systems == 'aarch64-darwin' && '[{"system":"aarch64-darwin","os":"macos-latest"}]' || inputs.systems == 'x86_64-darwin' && '[{"system":"x86_64-darwin","os":"macos-15-intel"}]' || '[{"system":"x86_64-linux","os":"ubuntu-latest"},{"system":"aarch64-linux","os":"ubuntu-24.04-arm"},{"system":"aarch64-darwin","os":"macos-latest"},{"system":"x86_64-darwin","os":"macos-15-intel"}]') }}
 
     env:
       NIX_PATH: nixpkgs=channel:nixos-unstable
