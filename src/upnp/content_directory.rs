@@ -3,6 +3,7 @@
 //!
 //! ```text
 //! 0 (root)
+//! ├── tracks    → track:{so-…}
 //! ├── artists   → artist:{ar-…} → album:{al-…} → track:{so-…}
 //! ├── albums    → album:{al-…}  → track:{so-…}
 //! └── playlists → playlist:{pl-…} → track:{so-…}
@@ -18,6 +19,7 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use std::sync::Arc;
 
 const ROOT_ID: &str = "0";
+const TRACKS_ID: &str = "tracks";
 const ARTISTS_ID: &str = "artists";
 const ALBUMS_ID: &str = "albums";
 const PLAYLISTS_ID: &str = "playlists";
@@ -146,6 +148,7 @@ async fn browse(state: &UpnpState, req: &HttpRequest, body: &str) -> HttpRespons
     }
 }
 
+#[derive(Debug)]
 enum BrowseError {
     NoSuchObject,
     Db(anyhow::Error),
@@ -168,10 +171,12 @@ async fn browse_children(
     let mut out = String::new();
     match object_id {
         ROOT_ID => {
+            let tracks = repo::count_songs(&state.pool).await?;
             let artists = repo::count_artists(&state.pool).await?;
             let albums = repo::count_albums(&state.pool).await?;
             let playlists = repo::all_playlists(&state.pool).await?.len() as i64;
             let tops = [
+                (TRACKS_ID, "Tracks", tracks),
                 (ARTISTS_ID, "Artists", artists),
                 (ALBUMS_ID, "Albums", albums),
                 (PLAYLISTS_ID, "Playlists", playlists),
@@ -187,6 +192,21 @@ async fn browse_children(
                     Some(*child_count),
                     None,
                 );
+            }
+            Ok((out, total))
+        }
+        TRACKS_ID => {
+            let total = repo::count_songs(&state.pool).await? as usize;
+            let start = start.min(total);
+            // UPnP RequestedCount=0 means all remaining entries, not an empty page.
+            let limit = if count == 0 {
+                total - start
+            } else {
+                count.min(total - start)
+            };
+            let songs = repo::all_songs_paginated(&state.pool, limit as i64, start as i64).await?;
+            for song in &songs {
+                track_item(&mut out, song, TRACKS_ID, base);
             }
             Ok((out, total))
         }
@@ -278,12 +298,13 @@ async fn browse_metadata(
                 "-1",
                 &state.friendly_name,
                 "object.container.storageFolder",
-                Some(3),
+                Some(4),
                 None,
             );
         }
-        ARTISTS_ID | ALBUMS_ID | PLAYLISTS_ID => {
+        TRACKS_ID | ARTISTS_ID | ALBUMS_ID | PLAYLISTS_ID => {
             let title = match object_id {
+                TRACKS_ID => "Tracks",
                 ARTISTS_ID => "Artists",
                 ALBUMS_ID => "Albums",
                 _ => "Playlists",
@@ -553,6 +574,73 @@ fn soap_fault(code: u32, description: &str) -> HttpResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[actix_rt::test]
+    async fn tracks_container_browses_all_songs_with_pagination() {
+        let pool = crate::db::init(std::path::Path::new(":memory:"))
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO artists (id, name, name_lower) VALUES ('ar', 'Artist', 'artist');
+            INSERT INTO albums (id, title, artist, artist_id) VALUES ('al', 'Album', 'Artist', 'ar');")
+            .execute(&pool).await.unwrap();
+        // Insert equal titles out of ID order to exercise stable page boundaries.
+        for (id, title) in [("3", "Zulu"), ("2", "Same"), ("1", "same")] {
+            sqlx::query("INSERT INTO songs (id, path, title, artist, artist_id, album, album_id, suffix, content_type)
+                VALUES (?1, ?1, ?2, 'Artist', 'ar', 'Album', 'al', 'mp3', 'audio/mpeg')")
+                .bind(id).bind(title).execute(&pool).await.unwrap();
+        }
+        let state = UpnpState {
+            pool,
+            covers_dir: Default::default(),
+            friendly_name: "Test".into(),
+            uuid: "test".into(),
+            subsonic_port: 4533,
+        };
+        let base = "http://127.0.0.1:8200";
+        let (root, total) = browse_children(&state, ROOT_ID, base, 0, 0).await.unwrap();
+        assert_eq!(total, 4);
+        assert!(root.contains("id=\"tracks\" parentID=\"0\""));
+        assert!(root.contains("childCount=\"3\"><dc:title>Tracks</dc:title>"));
+        let (meta, _) = browse_metadata(&state, ROOT_ID, base).await.unwrap();
+        assert!(meta.contains("childCount=\"4\""));
+        let (meta, _) = browse_metadata(&state, TRACKS_ID, base).await.unwrap();
+        assert!(meta.contains("<dc:title>Tracks</dc:title>"));
+        for (offset, id) in [(0, "1"), (1, "2"), (2, "3")] {
+            let (page, total) = browse_children(&state, TRACKS_ID, base, offset, 1)
+                .await
+                .unwrap();
+            assert_eq!(total, 3);
+            assert_eq!(page.matches("<item ").count(), 1);
+            assert!(page.contains(&format!("id=\"track:{id}\" parentID=\"tracks\"")));
+            assert!(page.contains(&format!("{base}/stream/{id}.mp3")));
+            let (meta, _) = browse_metadata(&state, &format!("track:{id}"), base)
+                .await
+                .unwrap();
+            assert!(meta.contains(&format!("{base}/stream/{id}.mp3")));
+        }
+        for (offset, count, expected) in [
+            (0, 0, 3),
+            (1, 0, 2),
+            (2, 10, 1),
+            (99, 1, 0),
+            (usize::MAX, 0, 0),
+        ] {
+            let (page, total) = browse_children(&state, TRACKS_ID, base, offset, count)
+                .await
+                .unwrap();
+            assert_eq!(total, 3);
+            assert_eq!(page.matches("<item ").count(), expected);
+        }
+        sqlx::query("DELETE FROM songs")
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let (page, total) = browse_children(&state, TRACKS_ID, base, 0, 0)
+            .await
+            .unwrap();
+        assert_eq!((page.as_str(), total), ("", 0));
+        state.pool.close().await;
+    }
 
     #[test]
     fn soap_arg_extracts_plain_and_prefixed_tags() {

@@ -418,7 +418,7 @@ pub async fn all_songs_paginated(pool: &Db, limit: i64, offset: i64) -> Result<V
     let rows = sqlx::query_as::<_, Song>(
         "SELECT id, path, title, artist, artist_id, album, album_id, genre, track_number,
                 disc_number, year, duration_ms, bitrate, filesize, suffix, content_type, cover_art
-         FROM songs ORDER BY title COLLATE NOCASE LIMIT ?1 OFFSET ?2",
+         FROM songs ORDER BY title COLLATE NOCASE, id LIMIT ?1 OFFSET ?2",
     )
     .bind(limit)
     .bind(offset)
