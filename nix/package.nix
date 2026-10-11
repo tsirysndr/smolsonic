@@ -114,7 +114,7 @@ rustPlatform.buildRustPackage {
     homepage = "https://github.com/tsirysndr/smolsonic";
     changelog = "https://github.com/tsirysndr/smolsonic/releases/tag/v${version}";
     license = lib.licenses.mit;
-    maintainers = with lib.maintainers; [ ];
+    maintainers = [ ];
     mainProgram = "smolsonic";
     platforms = [
       "x86_64-linux"
