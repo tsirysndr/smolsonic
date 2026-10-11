@@ -1,6 +1,6 @@
 {
   "name": "smolsonic",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "A tiny, self-contained Subsonic- and Jellyfin-compatible music + video server written in Rust.",
   "keywords": [
     "subsonic",

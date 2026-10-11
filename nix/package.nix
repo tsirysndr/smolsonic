@@ -9,13 +9,14 @@
 }:
 
 let
-  version = "0.10.0";
+  version = "0.10.1";
 
   src = fetchFromGitHub {
     owner = "tsirysndr";
     repo = "smolsonic";
     tag = "v${version}";
-    hash = "sha256-RzvhjLfJHVOTnwCEdSzZz/JoGU4HeGy813G1DUDGi8Q=";
+    # Refresh after the v0.10.1 release tag is published.
+    hash = lib.fakeHash;
   };
 
   s3webuiNodeModules = stdenv.mkDerivation {
@@ -92,7 +93,8 @@ rustPlatform.buildRustPackage {
   pname = "smolsonic";
   inherit version src;
 
-  cargoHash = "sha256-dgM0VpSnCiIPOx/JZ+SrjRgnYxQ5hhObsBU5nn6wZ+0=";
+  # Refresh alongside the release source hash above.
+  cargoHash = lib.fakeHash;
 
   preBuild = ''
     cp -r ${s3webui} s3webui/dist
