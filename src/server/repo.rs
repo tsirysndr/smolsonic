@@ -9,7 +9,7 @@ pub async fn all_videos(pool: &Db, limit: i64, offset: i64) -> Result<Vec<Video>
     let rows = sqlx::query_as::<_, Video>(
         "SELECT id, path, title, container, duration_ms, filesize, bitrate,
                 width, height, poster_path
-         FROM videos ORDER BY title COLLATE NOCASE LIMIT ?1 OFFSET ?2",
+         FROM videos ORDER BY title COLLATE NOCASE, id LIMIT ?1 OFFSET ?2",
     )
     .bind(limit)
     .bind(offset)

@@ -6,6 +6,7 @@
 //! ├── tracks    → track:{so-…}
 //! ├── artists   → artist:{ar-…} → album:{al-…} → track:{so-…}
 //! ├── albums    → album:{al-…}  → track:{so-…}
+//! ├── videos    → video:{vi-…}
 //! └── playlists → playlist:{pl-…} → track:{so-…}
 //! ```
 //!
@@ -13,12 +14,13 @@
 //! with a tag scanner instead of a full XML parser dependency.
 
 use super::{xml_escape, UpnpState, CD_SERVICE_TYPE, CM_SERVICE_TYPE, SERVER_HEADER};
-use crate::models::Song;
+use crate::models::{Song, Video};
 use crate::server::repo;
 use actix_web::{web, HttpRequest, HttpResponse};
 use std::sync::Arc;
 
 const ROOT_ID: &str = "0";
+const VIDEOS_ID: &str = "videos";
 const TRACKS_ID: &str = "tracks";
 const ARTISTS_ID: &str = "artists";
 const ALBUMS_ID: &str = "albums";
@@ -80,6 +82,11 @@ pub async fn connection_manager_control(req: HttpRequest, _body: web::Bytes) -> 
                 "audio/x-musepack",
                 "audio/x-ape",
                 "audio/x-wavpack",
+                "video/mp4",
+                "video/x-matroska",
+                "video/webm",
+                "video/quicktime",
+                "video/x-msvideo",
             ]
             .iter()
             .map(|m| format!("http-get:*:{m}:*"))
@@ -171,6 +178,7 @@ async fn browse_children(
     let mut out = String::new();
     match object_id {
         ROOT_ID => {
+            let videos = repo::count_videos(&state.pool).await?;
             let tracks = repo::count_songs(&state.pool).await?;
             let artists = repo::count_artists(&state.pool).await?;
             let albums = repo::count_albums(&state.pool).await?;
@@ -180,6 +188,7 @@ async fn browse_children(
                 (ARTISTS_ID, "Artists", artists),
                 (ALBUMS_ID, "Albums", albums),
                 (PLAYLISTS_ID, "Playlists", playlists),
+                (VIDEOS_ID, "Videos", videos),
             ];
             let total = tops.len();
             for (id, title, child_count) in page(&tops, start, count) {
@@ -192,6 +201,19 @@ async fn browse_children(
                     Some(*child_count),
                     None,
                 );
+            }
+            Ok((out, total))
+        }
+        VIDEOS_ID => {
+            let total = repo::count_videos(&state.pool).await? as usize;
+            let start = start.min(total);
+            let limit = if count == 0 {
+                total - start
+            } else {
+                count.min(total - start)
+            };
+            for video in repo::all_videos(&state.pool, limit as i64, start as i64).await? {
+                video_item(&mut out, &video, base);
             }
             Ok((out, total))
         }
@@ -275,7 +297,7 @@ async fn browse_children(
                     track_item(&mut out, s, object_id, base);
                 }
                 Ok((out, total))
-            } else if object_id.starts_with("track:") {
+            } else if object_id.starts_with("track:") || object_id.starts_with("video:") {
                 Ok((out, 0))
             } else {
                 Err(BrowseError::NoSuchObject)
@@ -298,12 +320,13 @@ async fn browse_metadata(
                 "-1",
                 &state.friendly_name,
                 "object.container.storageFolder",
-                Some(4),
+                Some(5),
                 None,
             );
         }
-        TRACKS_ID | ARTISTS_ID | ALBUMS_ID | PLAYLISTS_ID => {
+        VIDEOS_ID | TRACKS_ID | ARTISTS_ID | ALBUMS_ID | PLAYLISTS_ID => {
             let title = match object_id {
+                VIDEOS_ID => "Videos",
                 TRACKS_ID => "Tracks",
                 ARTISTS_ID => "Artists",
                 ALBUMS_ID => "Albums",
@@ -351,6 +374,11 @@ async fn browse_metadata(
                     None,
                     None,
                 );
+            } else if let Some(video_id) = object_id.strip_prefix("video:") {
+                let video = repo::find_video(&state.pool, video_id)
+                    .await?
+                    .ok_or(BrowseError::NoSuchObject)?;
+                video_item(&mut out, &video, base);
             } else if let Some(song_id) = object_id.strip_prefix("track:") {
                 let song = repo::find_song(&state.pool, song_id)
                     .await?
@@ -476,6 +504,30 @@ fn track_item(out: &mut String, song: &Song, parent: &str, base: &str) {
     ));
 }
 
+fn video_item(out: &mut String, video: &Video, base: &str) {
+    let id = xml_escape(&video.id);
+    let encoded_id = urlencoding::encode(&video.id);
+    let suffix = urlencoding::encode(&video.container);
+    let resolution = if video.width > 0 && video.height > 0 {
+        format!(" resolution=\"{}x{}\"", video.width, video.height)
+    } else {
+        String::new()
+    };
+    let poster = if video.poster_path.is_some() {
+        format!("<upnp:albumArtURI>{base}/video-art/{encoded_id}</upnp:albumArtURI>")
+    } else {
+        String::new()
+    };
+    out.push_str(&format!(
+        "<item id=\"video:{id}\" parentID=\"videos\" restricted=\"1\">\
+         <dc:title>{}</dc:title><upnp:class>object.item.videoItem.movie</upnp:class>{poster}\
+         <res protocolInfo=\"http-get:*:{}:*\" size=\"{}\" duration=\"{}\" bitrate=\"{}\"{resolution}>\
+         {base}/video/{encoded_id}.{suffix}</res></item>",
+        xml_escape(&video.title), super::video::content_type(&video.container),
+        video.filesize.max(0), hms(video.duration_ms.max(0)), video.bitrate.max(0) / 8,
+    ));
+}
+
 fn hms(ms: i64) -> String {
     let total_secs = ms / 1000;
     format!(
@@ -598,11 +650,11 @@ mod tests {
         };
         let base = "http://127.0.0.1:8200";
         let (root, total) = browse_children(&state, ROOT_ID, base, 0, 0).await.unwrap();
-        assert_eq!(total, 4);
+        assert_eq!(total, 5);
         assert!(root.contains("id=\"tracks\" parentID=\"0\""));
         assert!(root.contains("childCount=\"3\"><dc:title>Tracks</dc:title>"));
         let (meta, _) = browse_metadata(&state, ROOT_ID, base).await.unwrap();
-        assert!(meta.contains("childCount=\"4\""));
+        assert!(meta.contains("childCount=\"5\""));
         let (meta, _) = browse_metadata(&state, TRACKS_ID, base).await.unwrap();
         assert!(meta.contains("<dc:title>Tracks</dc:title>"));
         for (offset, id) in [(0, "1"), (1, "2"), (2, "3")] {

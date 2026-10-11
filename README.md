@@ -432,7 +432,8 @@ For music, use **Finamp** (or Amcfy / Symfonium). For video, use
 #### Video library
 
 When `[video]` is configured, smolsonic walks `video_dir` for `.mkv`, `.mp4`,
-`.webm`, `.mov`, `.avi`, `.m4v` and exposes them as Jellyfin movies. Title is
+`.webm`, `.mov`, `.avi`, `.m4v` and exposes them as Jellyfin movies and in
+the UPnP/DLNA Videos folder when `[upnp]` is enabled. Title is
 the cleaned filename stem. If `ffprobe` is on `PATH` it's used to extract
 duration / bitrate / width / height; otherwise those fields default to 0.
 
@@ -474,9 +475,12 @@ How it works:
   the same host) and multicasts `NOTIFY ssdp:alive` to `239.255.255.250:1900`
   on startup and every 10 minutes, per interface.
 - **ContentDirectory** — SOAP `Browse` over the existing SQLite library:
-  `root → Artists / Albums / Playlists`, with track metadata (title, artist,
+  `root → Tracks / Artists / Albums / Playlists / Videos`, with track metadata (title, artist,
   album, track number, duration, bitrate) and album art URIs in the DIDL-Lite
-  results. Paging via `StartingIndex`/`RequestedCount` is honoured.
+  results. Videos include titles, duration, bitrate, resolution, and poster URIs
+  when available. Paging via `StartingIndex`/`RequestedCount` is honoured.
+  Video streams use bounded memory and support GET, HEAD, and byte-range seeking;
+  clients must support the original container and codecs (no transcoding).
 - **Streaming** — direct-play from the same port, Range-aware, with the
   `contentFeatures.dlna.org` / `transferMode.dlna.org` headers renderers
   expect. Stream URLs end in the real file extension (`…/stream/so-….flac`)

@@ -14,6 +14,7 @@
 
 pub mod content_directory;
 pub mod ssdp;
+mod video;
 
 use crate::config::UpnpConfig;
 use crate::db::Db;
@@ -122,6 +123,18 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             web::route()
                 .guard(guard::Any(guard::Get()).or(guard::Head()))
                 .to(stream),
+        )
+        .route(
+            "/video/{id}",
+            web::route()
+                .guard(guard::Any(guard::Get()).or(guard::Head()))
+                .to(video::stream),
+        )
+        .route(
+            "/video-art/{id}",
+            web::route()
+                .guard(guard::Any(guard::Get()).or(guard::Head()))
+                .to(video::poster),
         )
         .route(
             "/art/{id}",
