@@ -33,17 +33,49 @@ jobs:
       NIX_PATH: nixpkgs=channel:nixos-unstable
 
     steps:
+      - name: Checkout pipeline
+        if: runner.os == 'Linux'
+        uses: actions/checkout@v4
+
+      - name: Checkout requested source
+        if: runner.os == 'Linux'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          path: .source
+
       - uses: actions/checkout@v4
+        if: runner.os == 'macOS'
         with:
           ref: ${{ inputs.ref || github.ref }}
 
       - uses: DeterminateSystems/nix-installer-action@v16
+        if: runner.os == 'macOS'
 
       - name: Setup Cachix
+        if: runner.os == 'macOS'
         uses: cachix/cachix-action@v17
         with:
           name: tsirysndr
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
 
       - name: Build nix/package.nix
+        if: runner.os == 'macOS'
         run: nix-build -E 'with import <nixpkgs> { }; callPackage ./nix/package.nix { }' --no-out-link
+
+      - name: Install Dagger
+        if: runner.os == 'Linux'
+        run: bash .dagger/install-dagger.sh
+
+      - name: Run PureScript Dagger pipeline
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/dagger
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          WORKFLOW_RUN: ${{ github.run_id }}-${{ github.run_attempt }}
+        with:
+          module: ci
+          key: nix-package
+          volumes: smolsonic-nix-store
+          command: |
+            dagger api call -m ci nix-package --source ../.source --cachix-token env://CACHIX_AUTH_TOKEN --run-id "$WORKFLOW_RUN"

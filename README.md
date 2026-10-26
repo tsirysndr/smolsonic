@@ -734,3 +734,8 @@ s3webui/             React + Vite admin SPA (built and embedded at release)
 ## License
 
 MIT.
+
+## CI pipelines
+
+Portable GitHub Actions jobs use [PureScript Dagger modules](.dagger/README.md).
+See that guide for commands, caching, and the jobs that remain native.
