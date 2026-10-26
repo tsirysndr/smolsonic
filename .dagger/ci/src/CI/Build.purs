@@ -1,9 +1,9 @@
 module CI.Build (buildArgs, linuxRelease) where
 
 import Prelude
+import CI.Package as Package
 import Dagger (Client)
 import Dagger.Container as Container
-import Dagger.CurrentModule as CurrentModule
 import Dagger.Directory as Directory
 import Dagger.Modules as Module
 import Dagger.Query as Query
@@ -11,6 +11,7 @@ import Dagger.Types (Container, Directory, Platform(..))
 import Data.Maybe (Maybe(..))
 import Effect.Aff (Aff, throwError)
 import Effect.Exception (error)
+import Data.String (trim)
 
 type BuildArgs = { source :: Directory, target :: String, version :: String }
 
@@ -20,9 +21,6 @@ buildArgs = ado
   target <- Module.argument "target"
   version <- Module.argument "version"
   in { source, target, version }
-
-scripts :: Client -> Directory
-scripts client = Query.currentModule client # CurrentModule.source # Directory.directory "scripts"
 
 withSource :: Directory -> Container -> Container
 withSource source = Container.withDirectoryWith "/src" source
@@ -54,12 +52,13 @@ linuxRelease client args = do
     "aarch64-unknown-linux-gnu" -> pure "linux-aarch64"
     "armv7-unknown-linux-gnueabihf" -> pure "linux-armhf"
     _ -> throwError (error "Unsupported Linux release target")
+  let installed = Query.containerWith
+        (Query.defaultContainerOpts { platform = Just (Platform "linux/amd64") }) client
+        # Container.from "rust:bookworm"
+        # Container.withExec [ "rustup", "target", "add", args.target ]
+  sysroot <- trim <$> Container.stdout (installed # Container.withExec [ "rustc", "--print", "sysroot" ])
   let
-    toolchain = Query.containerWith
-      (Query.defaultContainerOpts { platform = Just (Platform "linux/amd64") }) client
-      # Container.from "rust:bookworm"
-      # Container.withExec [ "rustup", "target", "add", args.target ]
-      # Container.withExec [ "sh", "-c", "cp -a \"$(rustc --print sysroot)\" /toolchain" ]
+    toolchain = installed # Container.withExec [ "cp", "-a", sysroot, "/toolchain" ]
     -- Reuse Cross.toml's compiler/sysroot images without nesting Docker.
     -- Direct toolchain binaries avoid depending on the rustup shim's host libc.
     environment = if args.target == "x86_64-unknown-linux-gnu" then toolchain
@@ -76,15 +75,10 @@ linuxRelease client args = do
       -- Cache mounts cannot be exported directly: materialize the executable.
       # Container.withExec [ "mkdir", "-p", "/binary" ]
       # Container.withExec [ "cp", "target/" <> args.target <> "/release/smolsonic", "/binary/smolsonic" ]
-    packaged = Query.container client
-      # Container.from "node:22-bookworm-slim"
-      # Container.withExec [ "sh", "-c", "apt-get update && apt-get install -y --no-install-recommends dpkg-dev rpm libdigest-sha-perl && rm -rf /var/lib/apt/lists/*" ]
-      # Container.withDirectory "/pipeline" (scripts client)
-      # withSource args.source
-      # Container.withFile "/src/target/smolsonic" (Container.file "/binary/smolsonic" built)
-      # Container.withWorkdir "/src"
-      # Container.withEnvVariable "VERSION" args.version
-      # Container.withEnvVariable "TARGET" args.target
-      # Container.withEnvVariable "LABEL" label
-      # Container.withExec [ "bash", "/pipeline/package.sh" ]
-  pure $ Container.directory "/out" packaged
+  Package.packageRelease client
+    { source: args.source
+    , binary: Container.file "/binary/smolsonic" built
+    , target: args.target
+    , label
+    , version: args.version
+    }
