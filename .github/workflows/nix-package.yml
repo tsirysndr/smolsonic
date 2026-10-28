@@ -80,4 +80,4 @@ jobs:
           key: nix-package
           volumes: smolsonic-nix-store
           command: |
-            dagger api call -m ci nix-package --source ../.source --cachix-token env://CACHIX_AUTH_TOKEN --run-id "$WORKFLOW_RUN"
+            dagger --progress logs -v api call -m ci nix-package --source ../.source --cachix-token env://CACHIX_AUTH_TOKEN --run-id "$WORKFLOW_RUN"
