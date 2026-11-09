@@ -45,9 +45,15 @@ jobs:
 
     steps:
       - name: Checkout pipeline
-        if: runner.os == 'Linux'
         uses: actions/checkout@v4
 
+      - name: Checkout FluentCI tooling
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-tooling
+      - uses: fluentci-io/setup-fluentci@next
+      - uses: ./.ci-tooling/.github/actions/fluentci-toolchain
       - name: Checkout release source
         if: runner.os == 'Linux'
         uses: actions/checkout@v4
@@ -55,15 +61,13 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
           path: .source
 
-      - name: Install Dagger
+      - name: Set up the pinned Dagger beta with FluentCI
+        run: fluentci run --work-dir "$GITHUB_WORKSPACE/.ci-tooling" ci setup-dagger
+        shell: bash
         if: runner.os == 'Linux'
-        uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77
-        with:
-          version: v1.0.0-beta.21
-
-      - name: Run PureScript Dagger pipeline
+      - name: Run container pipeline with FluentCI
         if: runner.os == 'Linux'
-        uses: ./.github/actions/dagger
+        uses: ./.ci-tooling/.github/actions/dagger
         env:
           TARGET: ${{ matrix.target }}
           VERSION: ${{ inputs.tag || github.ref_name }}
@@ -71,8 +75,8 @@ jobs:
           module: ci
           key: release-${{ matrix.target }}
           volumes: smolsonic-cargo-registry,smolsonic-cargo-git,smolsonic-target-${{ matrix.target }},smolsonic-bun
-          command: |
-            dagger --progress logs -v api call -m ci linux-release --source ../.source --target "$TARGET" --version "$VERSION" --output ../dist
+          command: |-
+            fluentci run --work-dir "$GITHUB_WORKSPACE/.ci-tooling" ci dagger --directory "$GITHUB_WORKSPACE/.dagger" --arguments '["--progress","logs","-v","api","call","-m","ci","linux-release","--source","../.source","--target","$TARGET","--version","$VERSION","--output","../dist"]'
 
       - name: Checkout
         if: runner.os == 'macOS'
@@ -82,24 +86,21 @@ jobs:
           # the workflow was dispatched from.
           ref: ${{ inputs.tag || github.ref }}
 
-      - name: Install Rust toolchain
+          clean: false
+      - name: Set up rust
+        run: fluentci run setup-rust setup --toolchain stable --targets '${{ matrix.target }}' | node "$GITHUB_WORKSPACE/.ci-tooling/.fluentci/github-env.mjs"
+        shell: bash
         if: runner.os == 'macOS'
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
       - name: Cache cargo
         if: runner.os == 'macOS'
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
-      - name: Setup Bun
+      - name: Set up bun
+        run: fluentci run setup-bun setup --version latest | node "$GITHUB_WORKSPACE/.ci-tooling/.fluentci/github-env.mjs"
+        shell: bash
         if: runner.os == 'macOS'
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
       - name: Install web UI dependencies
         if: runner.os == 'macOS'
         working-directory: s3webui
@@ -143,6 +144,9 @@ jobs:
             dist/*.rpm*
           if-no-files-found: error
 
+    defaults:
+      run:
+        shell: bash
   build-bsd:
     name: ${{ matrix.label }}
     runs-on: ubuntu-latest
@@ -177,11 +181,16 @@ jobs:
           # the workflow was dispatched from.
           ref: ${{ inputs.tag || github.ref }}
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Checkout FluentCI tooling
+        uses: actions/checkout@v4
         with:
-          bun-version: latest
-
+          ref: ${{ github.workflow_sha }}
+          path: .ci-tooling
+      - uses: fluentci-io/setup-fluentci@next
+      - uses: ./.ci-tooling/.github/actions/fluentci-toolchain
+      - name: Set up bun
+        run: fluentci run setup-bun setup --version latest | node "$GITHUB_WORKSPACE/.ci-tooling/.fluentci/github-env.mjs"
+        shell: bash
       - name: Install web UI dependencies
         working-directory: s3webui
         run: bun install --frozen-lockfile
@@ -242,6 +251,9 @@ jobs:
           path: dist/*.tar.gz*
           if-no-files-found: error
 
+    defaults:
+      run:
+        shell: bash
   release:
     name: Publish GitHub release
     needs: [build, build-bsd]
@@ -250,11 +262,16 @@ jobs:
       - name: Checkout pipeline
         uses: actions/checkout@v4
 
-      - name: Install Dagger
-        uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77
+      - name: Checkout FluentCI tooling
+        uses: actions/checkout@v4
         with:
-          version: v1.0.0-beta.21
-
+          ref: ${{ github.workflow_sha }}
+          path: .ci-tooling
+      - uses: fluentci-io/setup-fluentci@next
+      - uses: ./.ci-tooling/.github/actions/fluentci-toolchain
+      - name: Set up the pinned Dagger beta with FluentCI
+        run: fluentci run --work-dir "$GITHUB_WORKSPACE/.ci-tooling" ci setup-dagger
+        shell: bash
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -264,18 +281,22 @@ jobs:
       - name: Show artifacts
         run: ls -lh dist
 
-      - name: Publish release with Dagger
-        working-directory: .dagger
+      - name: Upload release assets with FluentCI
+        run: fluentci run --work-dir "$GITHUB_WORKSPACE/.ci-tooling" ci github-assets --directory "$GITHUB_WORKSPACE/dist" --tag "$RELEASE_TAG" --create=true
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
           WORKFLOW_RUN: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: dagger --progress logs -v api call -m ci publish-release --assets ../dist --tag "$RELEASE_TAG" --token env://GH_TOKEN --run-id "$WORKFLOW_RUN"
-
-      - name: Publish packages with Dagger
-        working-directory: .dagger
-        env:
+      - name: Set up gemfury
+        run: fluentci run setup-gemfury setup --sudo | node "$GITHUB_WORKSPACE/.ci-tooling/.fluentci/github-env.mjs"
+        shell: bash
+        env: &id001
           FURY_TOKEN: ${{ secrets.FURY_TOKEN }}
           FURY_ACCOUNT: ${{ secrets.FURY_ACCOUNT }}
           WORKFLOW_RUN: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: dagger --progress logs -v api call -m ci publish-gemfury --assets ../dist --account env://FURY_ACCOUNT --token env://FURY_TOKEN --run-id "$WORKFLOW_RUN"
+      - name: Publish packages with FluentCI
+        run: fluentci run --work-dir "$GITHUB_WORKSPACE/.ci-tooling" ci gemfury --directory "$GITHUB_WORKSPACE/dist"
+        env: *id001
+    defaults:
+      run:
+        shell: bash
