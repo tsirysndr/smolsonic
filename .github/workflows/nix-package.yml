@@ -27,7 +27,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.systems == 'linux' && '[{"system":"x86_64-linux","os":"ubuntu-latest"},{"system":"aarch64-linux","os":"ubuntu-24.04-arm"}]' || inputs.systems == 'macos' && '[{"system":"aarch64-darwin","os":"macos-latest"}]' || inputs.systems == 'x86_64-linux' && '[{"system":"x86_64-linux","os":"ubuntu-latest"}]' || inputs.systems == 'aarch64-linux' && '[{"system":"aarch64-linux","os":"ubuntu-24.04-arm"}]' || inputs.systems == 'aarch64-darwin' && '[{"system":"aarch64-darwin","os":"macos-latest"}]' || '[{"system":"x86_64-linux","os":"ubuntu-latest"},{"system":"aarch64-linux","os":"ubuntu-24.04-arm"},{"system":"aarch64-darwin","os":"macos-latest"}]') }}
+        include: ${{ fromJSON(inputs.systems == 'linux' && '[{"system":"x86_64-linux","os":"ubuntu-latest"},{"system":"aarch64-linux","os":"ubuntu-24.04-arm"}]' || inputs.systems == 'macos' &&
+          '[{"system":"aarch64-darwin","os":"macos-latest"}]' || inputs.systems == 'x86_64-linux' && '[{"system":"x86_64-linux","os":"ubuntu-latest"}]' || inputs.systems == 'aarch64-linux' &&
+          '[{"system":"aarch64-linux","os":"ubuntu-24.04-arm"}]' || inputs.systems == 'aarch64-darwin' && '[{"system":"aarch64-darwin","os":"macos-latest"}]' ||
+          '[{"system":"x86_64-linux","os":"ubuntu-latest"},{"system":"aarch64-linux","os":"ubuntu-24.04-arm"},{"system":"aarch64-darwin","os":"macos-latest"}]') }}
 
     env:
       NIX_PATH: nixpkgs=channel:nixos-unstable
@@ -69,22 +72,13 @@ jobs:
         if: runner.os == 'macOS'
         run: nix-build -E 'with import <nixpkgs> { }; callPackage ./nix/package.nix { }'
 
-      - name: Set up the pinned Dagger beta with FluentCI
-        run: fluentci run --work-dir "$GITHUB_WORKSPACE/.ci-tooling" ci setup-dagger
-        shell: bash
+      - name: Run native PureScript CI
         if: runner.os == 'Linux'
-      - name: Run container pipeline with FluentCI
-        if: runner.os == 'Linux'
-        uses: ./.ci-tooling/.github/actions/dagger
         env:
           CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
           WORKFLOW_RUN: ${{ github.run_id }}-${{ github.run_attempt }}
-        with:
-          module: ci
-          key: nix-package
-          volumes: smolsonic-nix-store
-          command: |-
-            fluentci run --work-dir "$GITHUB_WORKSPACE/.ci-tooling" ci dagger --directory "$GITHUB_WORKSPACE/.dagger" --arguments '["--progress","logs","-v","api","call","-m","ci","nix-package","--source","../.source","--cachix-token","env://CACHIX_AUTH_TOKEN","--run-id","$WORKFLOW_RUN"]'
+        run: |-
+          fluentci run --work-dir "$GITHUB_WORKSPACE/.ci-tooling" ci nix-package --source "$GITHUB_WORKSPACE/.source" --cache tsirysndr
       - name: Push result to Cachix
         run: fluentci run --work-dir "$GITHUB_WORKSPACE/.ci-tooling" ci cachix --directory "$GITHUB_WORKSPACE" --operation push --cache tsirysndr
         env:
